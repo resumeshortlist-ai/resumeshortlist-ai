@@ -9,11 +9,12 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 
 export async function POST(req: Request) {
   try {
-    const { email, priceId } = await req.json();
+    const { email } = await req.json();
 
+    const priceId = process.env.STRIPE_PRICE_ID;
     if (!priceId) {
-      return new Response(JSON.stringify({ error: "Missing priceId" }), {
-        status: 400,
+      return new Response(JSON.stringify({ error: "Missing STRIPE_PRICE_ID env var" }), {
+        status: 500,
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -26,7 +27,6 @@ export async function POST(req: Request) {
       customer_email: email || undefined,
       success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/app?canceled=1`,
-      metadata: { email: email || "" },
     });
 
     return new Response(JSON.stringify({ url: session.url }), {
