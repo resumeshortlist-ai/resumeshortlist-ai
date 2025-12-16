@@ -28,7 +28,6 @@ export default function CheckoutClient() {
       return;
     }
 
-    // if redirect fails for some reason
     setLoading(false);
   }
 
