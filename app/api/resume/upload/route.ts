@@ -57,10 +57,11 @@ export async function POST(req: Request) {
 
     const key = `resumes/${payload.sid}/${Date.now()}-${safeFileName(file.name)}`;
 
-    // IMPORTANT: omit `access` to satisfy current TS types
+    // NOTE: Your current @vercel/blob types require `access` and only accept "public"
     const blob = await put(key, file, {
+      access: "public",
       contentType: file.type || undefined,
-      addRandomSuffix: false
+      addRandomSuffix: false,
     });
 
     console.log("✅ Resume stored in Blob:", {
@@ -68,7 +69,7 @@ export async function POST(req: Request) {
       url: blob.url,
       size: file.size,
       email: payload.email,
-      sid: payload.sid
+      sid: payload.sid,
     });
 
     const url = new URL(req.url);
