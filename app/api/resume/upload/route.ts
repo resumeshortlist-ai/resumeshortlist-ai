@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import { cookies } from "next/headers";
-import { verifyAccessToken } from "@/lib/accessToken";
+import { verifyAccessToken } from "../../../../lib/accessToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,10 +29,10 @@ export async function POST(req: Request) {
     return NextResponse.redirect(new URL("/app?error=locked", url.origin));
   }
 
-  // Helpful check (Vercel usually injects this when Blob is connected)
+  // Ensure Blob token exists
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return NextResponse.json(
-      { error: "Missing BLOB_READ_WRITE_TOKEN. Connect Vercel Blob to the project and redeploy." },
+      { error: "Missing BLOB_READ_WRITE_TOKEN. Connect Vercel Blob and redeploy." },
       { status: 500 }
     );
   }
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `File too large. Max ${MAX_MB}MB.` }, { status: 400 });
     }
 
-    // Put into Blob (private is recommended for resumes)
+    // Store privately (recommended for resumes)
     const key = `resumes/${payload.sid}/${Date.now()}-${safeFileName(file.name)}`;
 
     const blob = await put(key, file, {
