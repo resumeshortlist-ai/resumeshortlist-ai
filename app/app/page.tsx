@@ -1,126 +1,125 @@
-// app/app/page.tsx
-import Link from "next/link";
-import { cookies } from "next/headers";
-import CheckoutClient from "./CheckoutClient";
-import { verifyAccessToken } from "../../lib/accessToken";
+"use client";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { upload } from "@vercel/blob/client";
 
-export default function AppPage({
-  searchParams,
-}: {
-  searchParams?: Record<string, string | string[] | undefined>;
-}) {
-  const token = cookies().get("rsl_access")?.value || "";
-  const payload = token ? verifyAccessToken(token) : null;
-  const unlocked = Boolean(payload);
+export default function AppPage() {
+  const sp = useSearchParams();
+  const sessionId = sp.get("session_id") || "";
 
-  const uploaded = searchParams?.uploaded === "1";
-  const canceled = searchParams?.canceled === "1";
-  const error = typeof searchParams?.error === "string" ? searchParams.error : "";
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const fileParam = typeof searchParams?.file === "string" ? searchParams.file : "";
-  const fileName = fileParam ? decodeURIComponent(fileParam) : "";
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<string>("");
+  const [blobUrl, setBlobUrl] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+
+  const canUpload = useMemo(() => Boolean(sessionId), [sessionId]);
+
+  function getSafeUploadName(file: File) {
+    const original = file.name.toLowerCase();
+    const ext = original.endsWith(".pdf") ? "pdf" : original.endsWith(".docx") ? "docx" : "";
+    return ext ? `resume.${ext}` : "resume";
+  }
+
+  async function onUpload() {
+    setStatus("");
+    setBlobUrl("");
+
+    if (!canUpload) {
+      setStatus("Missing session_id — please complete checkout first.");
+      return;
+    }
+
+    const file = inputRef.current?.files?.[0];
+    if (!file) {
+      setStatus("Please choose a PDF or DOCX file.");
+      return;
+    }
+
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const isDocx =
+      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      file.name.toLowerCase().endsWith(".docx");
+
+    if (!isPdf && !isDocx) {
+      setStatus("Only PDF or DOCX is allowed.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const safeName = getSafeUploadName(file);
+
+      const blob = await upload(safeName, file, {
+        access: "public",
+        handleUploadUrl: "/api/resume/upload",
+        clientPayload: JSON.stringify({ sessionId, email: email || undefined }),
+      });
+
+      setBlobUrl(blob.url);
+      setStatus("Uploaded ✅");
+    } catch (e: any) {
+      setStatus(e?.message || "Upload failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "80px auto",
-        padding: 24,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <h1 style={{ fontSize: 40, marginBottom: 6 }}>ResumeShortlist — App</h1>
-      <p style={{ fontSize: 16, marginBottom: 20, color: "#6b7280" }}>
-        {unlocked ? "Access unlocked. Upload your resume below." : "Purchase to unlock the resume optimizer."}
-      </p>
+    <main style={{ maxWidth: 900, margin: "80px auto", padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <h1 style={{ fontSize: 40, marginBottom: 6 }}>ResumeShortList.app — Upload</h1>
 
-      {uploaded ? (
-        <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, border: "1px solid #10b981", background: "#ecfdf5", color: "#065f46", fontWeight: 700 }}>
-          ✅ Upload received{fileName ? `: ${fileName}` : ""}. Saved to storage.
+      {!canUpload ? (
+        <div style={{ padding: 14, border: "1px solid #f59e0b", borderRadius: 12, background: "#fffbeb", marginBottom: 18 }}>
+          <b>Payment required.</b> Please complete checkout first, then come back to this page from the success screen.
         </div>
-      ) : null}
-
-      {canceled ? (
-        <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", fontWeight: 700 }}>
-          ⚠️ Checkout was canceled. You were not charged.
+      ) : (
+        <div style={{ padding: 14, border: "1px solid #e5e7eb", borderRadius: 12, background: "#f9fafb", marginBottom: 18 }}>
+          Payment session detected ✅ You can upload now.
         </div>
-      ) : null}
-
-      {error ? (
-        <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, border: "1px solid #ef4444", background: "#fef2f2", color: "#991b1b", fontWeight: 700 }}>
-          ❌ Error: <code>{error}</code>
-        </div>
-      ) : null}
+      )}
 
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 20 }}>
-        {unlocked ? (
-          <>
-            <div style={{ marginBottom: 14 }}>
-              <span style={{ padding: "4px 10px", borderRadius: 999, border: "1px solid #10b981", color: "#065f46", background: "#ecfdf5", fontWeight: 700 }}>
-                Unlocked ✅
-              </span>
-              <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>
-                {payload?.email ? (
-                  <>
-                    Signed for: <code>{payload.email}</code>
-                  </>
-                ) : (
-                  <>Access granted</>
-                )}
-              </div>
-            </div>
+        <label style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>Email (optional)</label>
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@email.com"
+          style={{ width: "100%", padding: 10, marginBottom: 16 }}
+        />
 
-            <form action="/api/resume/upload" method="post" encType="multipart/form-data" style={{ display: "grid", gap: 10 }}>
-              <label style={{ fontWeight: 700 }}>Resume (PDF/DOC/DOCX)</label>
-              <input
-                type="file"
-                name="resume"
-                accept=".pdf,.doc,.docx"
-                required
-                style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
-              />
-              <button
-                type="submit"
-                style={{
-                  padding: "10px 16px",
-                  borderRadius: 10,
-                  border: "1px solid #111",
-                  background: "#111",
-                  color: "#fff",
-                  cursor: "pointer",
-                  width: "fit-content",
-                  fontWeight: 700,
-                }}
-              >
-                Upload resume →
-              </button>
-              <div style={{ fontSize: 13, color: "#6b7280" }}>
-                Stored in Vercel Blob (private).
-              </div>
-            </form>
-          </>
-        ) : (
-          <>
-            <div style={{ marginBottom: 14 }}>
-              <span style={{ padding: "4px 10px", borderRadius: 999, border: "1px solid #f59e0b", color: "#92400e", background: "#fffbeb", fontWeight: 700 }}>
-                Locked 🔒
-              </span>
-            </div>
+        <label style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>Resume (PDF or DOCX)</label>
+        <input ref={inputRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
 
-            <CheckoutClient />
+        <div style={{ marginTop: 16 }}>
+          <button
+            onClick={onUpload}
+            disabled={loading || !canUpload}
+            style={{
+              padding: "10px 16px",
+              borderRadius: 10,
+              border: "1px solid #111",
+              background: loading || !canUpload ? "#999" : "#111",
+              color: "#fff",
+              cursor: loading || !canUpload ? "not-allowed" : "pointer",
+            }}
+          >
+            {loading ? "Uploading..." : "Upload Resume"}
+          </button>
+        </div>
 
-            <div style={{ marginTop: 12, fontSize: 13, color: "#6b7280" }}>
-              After payment, you’ll land on the success page — click <b>Continue to your upload →</b> to unlock access.
-            </div>
-          </>
-        )}
+        {status ? <div style={{ marginTop: 14 }}>{status}</div> : null}
+        {blobUrl ? (
+          <div style={{ marginTop: 10, fontSize: 14 }}>
+            Stored at: <a href={blobUrl} target="_blank" rel="noreferrer">{blobUrl}</a>
+          </div>
+        ) : null}
       </div>
 
       <div style={{ marginTop: 20 }}>
-        <Link href="/">← Back to home</Link>
+        <a href="/">← Back to home</a>
       </div>
     </main>
   );
