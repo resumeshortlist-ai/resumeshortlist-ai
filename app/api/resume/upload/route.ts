@@ -1,14 +1,9 @@
 // app/api/resume/upload/route.ts
-import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2023-10-16",
-});
 
 type ClientPayload = {
   sessionId?: string;
@@ -31,13 +26,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           payload = {};
         }
 
-        const sessionId = payload.sessionId;
-        if (!sessionId) throw new Error("Missing sessionId. Please complete checkout first.");
-
-        const session = await stripe.checkout.sessions.retrieve(sessionId);
-        const paid = session.payment_status === "paid" || session.status === "complete";
-        if (!paid) throw new Error("Payment not confirmed for this session.");
-
         return {
           allowedContentTypes: [
             "application/pdf",
@@ -45,8 +33,8 @@ export async function POST(request: Request): Promise<NextResponse> {
           ],
           addRandomSuffix: true,
           tokenPayload: JSON.stringify({
-            sessionId,
-            email: payload.email || null
+            email: payload.email || null,
+            sessionId: payload.sessionId || null
           })
         };
       },
@@ -57,8 +45,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           pathname: blob.pathname,
           tokenPayload
         });
-
-        // Next step later: kick off resume parsing + ATS scoring here.
       }
     });
 
