@@ -1,6 +1,7 @@
+// app/app/page.tsx
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { upload } from "@vercel/blob/client";
 
@@ -11,17 +12,11 @@ export default function AppPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<string>("");
-  const [blobUrl, setBlobUrl] = useState<string>("");
+  const [status, setStatus] = useState("");
+  const [blobUrl, setBlobUrl] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const canUpload = useMemo(() => Boolean(sessionId), [sessionId]);
-
-  function getSafeUploadName(file: File) {
-    const original = file.name.toLowerCase();
-    const ext = original.endsWith(".pdf") ? "pdf" : original.endsWith(".docx") ? "docx" : "";
-    return ext ? `resume.${ext}` : "resume";
-  }
+  const canUpload = Boolean(sessionId);
 
   async function onUpload() {
     setStatus("");
@@ -38,10 +33,11 @@ export default function AppPage() {
       return;
     }
 
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const nameLower = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || nameLower.endsWith(".pdf");
     const isDocx =
       file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      file.name.toLowerCase().endsWith(".docx");
+      nameLower.endsWith(".docx");
 
     if (!isPdf && !isDocx) {
       setStatus("Only PDF or DOCX is allowed.");
@@ -50,12 +46,12 @@ export default function AppPage() {
 
     setLoading(true);
     try {
-      const safeName = getSafeUploadName(file);
+      const safeName = isPdf ? "resume.pdf" : "resume.docx";
 
       const blob = await upload(safeName, file, {
-        access: "public",
+        access: "public", // token-gated upload; URL is still accessible if someone has it
         handleUploadUrl: "/api/resume/upload",
-        clientPayload: JSON.stringify({ sessionId, email: email || undefined }),
+        clientPayload: JSON.stringify({ sessionId, email: email || undefined })
       });
 
       setBlobUrl(blob.url);
@@ -69,11 +65,11 @@ export default function AppPage() {
 
   return (
     <main style={{ maxWidth: 900, margin: "80px auto", padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
-      <h1 style={{ fontSize: 40, marginBottom: 6 }}>ResumeShortList.app — Upload</h1>
+      <h1 style={{ fontSize: 40, marginBottom: 6 }}>ResumeShortlist — Upload</h1>
 
       {!canUpload ? (
         <div style={{ padding: 14, border: "1px solid #f59e0b", borderRadius: 12, background: "#fffbeb", marginBottom: 18 }}>
-          <b>Payment required.</b> Please complete checkout first, then come back to this page from the success screen.
+          <b>Payment required.</b> Complete checkout, then click “Continue to Upload” on the success page.
         </div>
       ) : (
         <div style={{ padding: 14, border: "1px solid #e5e7eb", borderRadius: 12, background: "#f9fafb", marginBottom: 18 }}>
@@ -91,7 +87,11 @@ export default function AppPage() {
         />
 
         <label style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>Resume (PDF or DOCX)</label>
-        <input ref={inputRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        />
 
         <div style={{ marginTop: 16 }}>
           <button
@@ -104,6 +104,7 @@ export default function AppPage() {
               background: loading || !canUpload ? "#999" : "#111",
               color: "#fff",
               cursor: loading || !canUpload ? "not-allowed" : "pointer",
+              fontWeight: 700
             }}
           >
             {loading ? "Uploading..." : "Upload Resume"}
@@ -113,13 +114,12 @@ export default function AppPage() {
         {status ? <div style={{ marginTop: 14 }}>{status}</div> : null}
         {blobUrl ? (
           <div style={{ marginTop: 10, fontSize: 14 }}>
-            Stored at: <a href={blobUrl} target="_blank" rel="noreferrer">{blobUrl}</a>
+            Stored at:{" "}
+            <a href={blobUrl} target="_blank" rel="noreferrer">
+              {blobUrl}
+            </a>
           </div>
         ) : null}
-      </div>
-
-      <div style={{ marginTop: 20 }}>
-        <a href="/">← Back to home</a>
       </div>
     </main>
   );
