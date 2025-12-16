@@ -24,13 +24,14 @@ export default async function SuccessPage({
           We couldn’t find a Stripe session ID.
         </p>
         <Link href="/app" style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111", textDecoration: "none" }}>
-          Back to Upload
+          Back to App
         </Link>
       </main>
     );
   }
 
   let paid = false;
+
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     paid = session.payment_status === "paid" || session.status === "complete";
@@ -63,10 +64,17 @@ export default async function SuccessPage({
       </div>
 
       <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {/* ✅ THIS is the key change */}
         <Link
           href={`/app?session_id=${encodeURIComponent(sessionId)}`}
-          style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111", background: "#111", color: "#fff", textDecoration: "none" }}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: "1px solid #111",
+            background: "#111",
+            color: "#fff",
+            textDecoration: "none",
+            fontWeight: 700,
+          }}
         >
           Continue to Upload →
         </Link>
