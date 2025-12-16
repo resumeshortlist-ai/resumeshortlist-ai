@@ -80,3 +80,11 @@ export const BLOG_SLUGS = POSTS.map((p) => p.slug);
 export function getPostBySlug(slug: string): BlogPost | undefined {
   return POSTS.find((p) => p.slug === slug);
 }
+
+/**
+ * Backwards-compatible helper for pages that import `getPost`
+ * (alias to getPostBySlug)
+ */
+export function getPost(slug: string): BlogPost | undefined {
+  return getPostBySlug(slug);
+}
