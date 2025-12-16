@@ -20,11 +20,10 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const jsonResponse = await handleUpload({
-      body,
       request,
+      body,
 
       onBeforeGenerateToken: async (_pathname, clientPayload) => {
-        // 1) Read what the client sent us
         let payload: ClientPayload = {};
         try {
           payload = clientPayload ? (JSON.parse(clientPayload) as ClientPayload) : {};
@@ -32,50 +31,39 @@ export async function POST(request: Request): Promise<NextResponse> {
           payload = {};
         }
 
-        // 2) Require Stripe session_id (from success page)
         const sessionId = payload.sessionId;
-        if (!sessionId) {
-          throw new Error("Missing sessionId. Please complete checkout first.");
-        }
+        if (!sessionId) throw new Error("Missing sessionId. Please complete checkout first.");
 
-        // 3) Verify payment with Stripe
         const session = await stripe.checkout.sessions.retrieve(sessionId);
         const paid = session.payment_status === "paid" || session.status === "complete";
-        if (!paid) {
-          throw new Error("Payment not confirmed for this session.");
-        }
+        if (!paid) throw new Error("Payment not confirmed for this session.");
 
-        // 4) Only allow PDF + DOCX, and make the pathname unguessable
         return {
           allowedContentTypes: [
             "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           ],
           addRandomSuffix: true,
           tokenPayload: JSON.stringify({
             sessionId,
-            email: payload.email || null,
-          }),
+            email: payload.email || null
+          })
         };
       },
 
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        // This runs after the browser finishes uploading (not reliable on localhost without tunneling)
-        console.log("✅ resume upload completed", {
+        console.log("✅ Upload completed", {
           url: blob.url,
           pathname: blob.pathname,
-          tokenPayload,
+          tokenPayload
         });
 
-        // Later: trigger parsing / ATS scoring pipeline here.
-      },
+        // Next step later: kick off resume parsing + ATS scoring here.
+      }
     });
 
     return NextResponse.json(jsonResponse);
   } catch (error) {
-    return NextResponse.json(
-      { error: (error as Error).message },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: (error as Error).message }, { status: 400 });
   }
 }
