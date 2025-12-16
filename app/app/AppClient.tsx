@@ -25,10 +25,10 @@ export default function AppClient() {
   const [jobDesc, setJobDesc] = useState("");
 
   const [file, setFile] = useState<File | null>(null);
+const [score, setScore] = useState<ScoreResult | null>(null);
   const [blobUrl, setBlobUrl] = useState<string>("");
 
-  const [score, setScore] = useState<ScoreResult | null>(null);
-  const [optResult, setOptResult] = useState<any>(null);
+    const [optResult, setOptResult] = useState<any>(null);
 
   const [selectedTier, setSelectedTier] = useState("Executive Level");
 
