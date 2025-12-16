@@ -1,83 +1,81 @@
 // app/api/resume/upload/route.ts
+import Stripe from "stripe";
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
-import { cookies } from "next/headers";
-import { verifyAccessToken } from "../../../../lib/accessToken";
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_MB = 8;
-const MAX_BYTES = MAX_MB * 1024 * 1024;
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2023-10-16",
+});
 
-function isAllowed(filename: string) {
-  const lower = filename.toLowerCase();
-  return lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx");
-}
+type ClientPayload = {
+  sessionId?: string;
+  email?: string;
+};
 
-function safeFileName(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-export async function POST(req: Request) {
-  // Require paid/unlocked cookie
-  const token = cookies().get("rsl_access")?.value || "";
-  const payload = token ? verifyAccessToken(token) : null;
-
-  if (!payload) {
-    const url = new URL(req.url);
-    return NextResponse.redirect(new URL("/app?error=locked", url.origin));
-  }
-
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return NextResponse.json(
-      { error: "Missing BLOB_READ_WRITE_TOKEN. Connect Vercel Blob and redeploy." },
-      { status: 500 }
-    );
-  }
+export async function POST(request: Request): Promise<NextResponse> {
+  const body = (await request.json()) as HandleUploadBody;
 
   try {
-    const form = await req.formData();
-    const file = form.get("resume");
+    const jsonResponse = await handleUpload({
+      body,
+      request,
 
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "Missing file field: resume" }, { status: 400 });
-    }
+      onBeforeGenerateToken: async (_pathname, clientPayload) => {
+        // 1) Read what the client sent us
+        let payload: ClientPayload = {};
+        try {
+          payload = clientPayload ? (JSON.parse(clientPayload) as ClientPayload) : {};
+        } catch {
+          payload = {};
+        }
 
-    if (!isAllowed(file.name)) {
-      return NextResponse.json(
-        { error: "Invalid file type. Please upload PDF, DOC, or DOCX." },
-        { status: 400 }
-      );
-    }
+        // 2) Require Stripe session_id (from success page)
+        const sessionId = payload.sessionId;
+        if (!sessionId) {
+          throw new Error("Missing sessionId. Please complete checkout first.");
+        }
 
-    if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: `File too large. Max ${MAX_MB}MB.` }, { status: 400 });
-    }
+        // 3) Verify payment with Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        const paid = session.payment_status === "paid" || session.status === "complete";
+        if (!paid) {
+          throw new Error("Payment not confirmed for this session.");
+        }
 
-    const key = `resumes/${payload.sid}/${Date.now()}-${safeFileName(file.name)}`;
+        // 4) Only allow PDF + DOCX, and make the pathname unguessable
+        return {
+          allowedContentTypes: [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ],
+          addRandomSuffix: true,
+          tokenPayload: JSON.stringify({
+            sessionId,
+            email: payload.email || null,
+          }),
+        };
+      },
 
-    // NOTE: Your current @vercel/blob types require `access` and only accept "public"
-    const blob = await put(key, file, {
-      access: "public",
-      contentType: file.type || undefined,
-      addRandomSuffix: false,
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        // This runs after the browser finishes uploading (not reliable on localhost without tunneling)
+        console.log("✅ resume upload completed", {
+          url: blob.url,
+          pathname: blob.pathname,
+          tokenPayload,
+        });
+
+        // Later: trigger parsing / ATS scoring pipeline here.
+      },
     });
 
-    console.log("✅ Resume stored in Blob:", {
-      key,
-      url: blob.url,
-      size: file.size,
-      email: payload.email,
-      sid: payload.sid,
-    });
-
-    const url = new URL(req.url);
-    return NextResponse.redirect(
-      new URL(`/app?uploaded=1&file=${encodeURIComponent(file.name)}`, url.origin)
+    return NextResponse.json(jsonResponse);
+  } catch (error) {
+    return NextResponse.json(
+      { error: (error as Error).message },
+      { status: 400 }
     );
-  } catch (e: any) {
-    console.error("Upload error:", e?.message);
-    return NextResponse.json({ error: e?.message || "Upload failed" }, { status: 500 });
   }
 }
