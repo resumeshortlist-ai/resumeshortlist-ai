@@ -246,3 +246,85 @@ body {
   .rs-nav { gap: 8px; }
   .rs-navlink { padding: 8px 8px; }
 }
+
+
+/* ---------- Resume Shortlist: premium marketing + app UI helpers ---------- */
+.section { padding: 72px 0; }
+.container { width: min(1100px, calc(100% - 48px)); margin: 0 auto; }
+.spacer { height: 56px; }
+.spacerSmall { height: 22px; }
+
+.grid2 { display: grid; gap: 28px; grid-template-columns: 1.2fr .8fr; align-items: start; }
+.grid3 { display: grid; gap: 18px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 900px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .grid3 { grid-template-columns: 1fr; }
+}
+
+.h1 { font-size: clamp(34px, 4vw, 54px); line-height: 1.05; letter-spacing: -0.02em; margin: 10px 0 14px; }
+.h2 { font-size: clamp(22px, 2.4vw, 30px); line-height: 1.15; letter-spacing: -0.01em; margin: 0 0 10px; }
+.p { font-size: 18px; line-height: 1.6; color: rgba(255,255,255,.78); margin: 0 0 14px; }
+.muted { color: rgba(255,255,255,.68); line-height: 1.55; }
+.fine { color: rgba(255,255,255,.55); font-size: 13px; line-height: 1.5; margin-top: 10px; }
+
+.badge { display: inline-flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); color: rgba(255,255,255,.82); }
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent2, #7c5cff); display: inline-block; }
+
+.card { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 18px; padding: 20px; box-shadow: var(--sh1, 0 18px 50px rgba(0,0,0,.35)); }
+.cardTitle { font-weight: 650; letter-spacing: -0.01em; margin-bottom: 8px; color: rgba(255,255,255,.92); }
+.divider { height: 1px; background: rgba(255,255,255,.12); margin: 14px 0; }
+.list { margin: 0; padding-left: 18px; color: rgba(255,255,255,.72); line-height: 1.65; }
+
+.ctaRow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.btnPrimary, .btnSecondary { display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 12px 16px; border-radius: 12px; font-weight: 650; text-decoration: none; border: 1px solid transparent; }
+.btnPrimary { background: var(--accent2, #7c5cff); color: white; box-shadow: 0 14px 40px rgba(124,92,255,.28); }
+.btnPrimary:hover { filter: brightness(1.05); }
+.btnSecondary { background: rgba(255,255,255,.06); color: rgba(255,255,255,.88); border-color: rgba(255,255,255,.14); }
+.btnSecondary:hover { background: rgba(255,255,255,.08); }
+.block { width: 100%; }
+
+.callout { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); border-radius: 18px; padding: 22px; }
+.calloutSoft { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.10); border-radius: 18px; padding: 20px; }
+.feature { padding: 18px; border-radius: 18px; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03); }
+.featureTitle { font-weight: 650; margin-bottom: 8px; color: rgba(255,255,255,.92); }
+
+.form { display: grid; gap: 10px; margin-top: 10px; }
+.label { font-weight: 650; color: rgba(255,255,255,.86); }
+.input, .select, .inputFile { width: 100%; padding: 12px 12px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.25); color: rgba(255,255,255,.88); }
+.inputFile { padding: 10px 12px; }
+.error { color: #ffb4b4; margin: 10px 0 0; }
+
+.resultsGrid { display: grid; grid-template-columns: 1fr 360px; gap: 18px; align-items: start; margin-top: 18px; }
+@media (max-width: 900px) { .resultsGrid { grid-template-columns: 1fr; } }
+
+.sidePanel { position: sticky; top: 18px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px; padding: 18px; }
+.sideTitle { font-weight: 750; letter-spacing: -0.01em; color: rgba(255,255,255,.92); margin-bottom: 6px; }
+.sideSub { font-weight: 650; color: rgba(255,255,255,.9); margin-bottom: 6px; }
+
+.verdictTitle { font-weight: 750; letter-spacing: -0.01em; color: rgba(255,255,255,.95); margin-bottom: 8px; font-size: 18px; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: center; }
+@media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+
+.score { font-size: 44px; font-weight: 800; letter-spacing: -0.03em; margin-top: 6px; }
+.scoreBarWrap { height: 12px; border-radius: 999px; background: rgba(255,255,255,.10); overflow: hidden; }
+.scoreBar { height: 100%; background: var(--accent2, #7c5cff); }
+
+.mini { padding: 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03); }
+.miniLabel { color: rgba(255,255,255,.62); font-size: 12px; margin-bottom: 6px; }
+.miniValue { color: rgba(255,255,255,.9); font-weight: 650; }
+
+.recoGrid { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 900px) { .recoGrid { grid-template-columns: 1fr; } }
+.recoCard { padding: 14px; border-radius: 16px; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03); }
+.recoKicker { font-size: 12px; color: rgba(255,255,255,.62); margin-bottom: 8px; font-weight: 650; }
+.recoText { color: rgba(255,255,255,.88); line-height: 1.55; }
+
+.pricingGrid { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 1100px) { .pricingGrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 700px) { .pricingGrid { grid-template-columns: 1fr; } }
+.price { font-size: 34px; font-weight: 800; letter-spacing: -0.03em; margin: 6px 0 10px; color: rgba(255,255,255,.92); }
