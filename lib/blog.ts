@@ -2,7 +2,12 @@
 export type BlogPost = {
   slug: string;
   title: string;
+
+  // Some pages use `excerpt`, others use `description`.
+  // Keep both so we never break imports.
+  excerpt: string;
   description: string;
+
   date: string; // YYYY-MM-DD
   readingTime: string; // e.g. "4 min"
   tags: string[];
@@ -13,6 +18,8 @@ export const POSTS: BlogPost[] = [
   {
     slug: "ats-resume-score-what-it-means",
     title: "ATS Resume Score: what it means (and what it doesn’t)",
+    excerpt:
+      "How to interpret an ATS-style score, what impacts it most, and how to improve it without ruining readability.",
     description:
       "How to interpret an ATS-style score, what impacts it most, and how to improve it without ruining readability.",
     date: "2025-12-01",
@@ -36,6 +43,8 @@ A score is useful as a diagnostic: formatting issues, missing keyword coverage, 
   {
     slug: "ats-friendly-formatting-checklist",
     title: "ATS-friendly formatting checklist (copy/paste)",
+    excerpt:
+      "A practical checklist to make your resume parseable and recruiter-friendly — without looking boring.",
     description:
       "A practical checklist to make your resume parseable and recruiter-friendly — without looking boring.",
     date: "2025-12-03",
@@ -56,6 +65,8 @@ A score is useful as a diagnostic: formatting issues, missing keyword coverage, 
   {
     slug: "bullet-points-that-sound-executive",
     title: "Bullet points that sound executive (without fluff)",
+    excerpt:
+      "Turn task bullets into outcome bullets using a simple rewrite formula and examples.",
     description:
       "Turn task bullets into outcome bullets using a simple rewrite formula and examples.",
     date: "2025-12-05",
@@ -81,10 +92,7 @@ export function getPostBySlug(slug: string): BlogPost | undefined {
   return POSTS.find((p) => p.slug === slug);
 }
 
-/**
- * Backwards-compatible helper for pages that import `getPost`
- * (alias to getPostBySlug)
- */
+// Backwards-compatible helper for pages that import `getPost`
 export function getPost(slug: string): BlogPost | undefined {
   return getPostBySlug(slug);
 }
