@@ -18,71 +18,53 @@ export default async function SuccessPage({
 
   if (!sessionId) {
     return (
-      <main style={{ maxWidth: 860, margin: "60px auto", padding: "0 20px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <main style={{ maxWidth: 860, margin: "60px auto", padding: "0 20px", fontFamily: "system-ui" }}>
         <h1 style={{ fontSize: 44, marginBottom: 10 }}>Missing session</h1>
-        <p style={{ fontSize: 18, lineHeight: 1.6, marginTop: 0 }}>
-          We couldn’t find a Stripe session ID.
-        </p>
-        <Link href="/app" style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111", textDecoration: "none" }}>
-          Back to App
-        </Link>
+        <p>We couldn’t find a Stripe session ID.</p>
+        <Link href="/app">Back to App</Link>
       </main>
     );
   }
 
   let paid = false;
+  let blobUrl: string | null = null;
 
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     paid = session.payment_status === "paid" || session.status === "complete";
+    blobUrl = (session.metadata?.blobUrl as string) || null;
   } catch {
     paid = false;
   }
 
+  const continueHref = blobUrl
+    ? `/app?session_id=${encodeURIComponent(sessionId)}&blob=${encodeURIComponent(blobUrl)}`
+    : `/app?session_id=${encodeURIComponent(sessionId)}`;
+
   return (
-    <main style={{ maxWidth: 860, margin: "60px auto", padding: "0 20px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+    <main style={{ maxWidth: 860, margin: "60px auto", padding: "0 20px", fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 44, marginBottom: 10 }}>
         {paid ? "Payment successful ✅" : "Payment not confirmed ⚠️"}
       </h1>
 
       <p style={{ fontSize: 18, lineHeight: 1.6, marginTop: 0 }}>
         {paid
-          ? "Thanks — your purchase is confirmed."
+          ? "Thanks — your purchase is confirmed. Continue to generate your optimized output."
           : "We couldn’t confirm payment for this session. If you believe this is a mistake, try again or contact support."}
       </p>
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginTop: 20 }}>
-        <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Next step</h2>
-        <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-          <li>Click below to continue to the upload page.</li>
-          <li>We pass your Stripe <code>session_id</code> so uploads are gated.</li>
-        </ul>
-
-        <p style={{ marginTop: 12, color: "#6b7280", fontSize: 14 }}>
-          Checkout session: <code>{sessionId}</code>
-        </p>
-      </div>
-
       <div style={{ marginTop: 24, display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <Link
-          href={`/app?session_id=${encodeURIComponent(sessionId)}`}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid #111",
-            background: "#111",
-            color: "#fff",
-            textDecoration: "none",
-            fontWeight: 700,
-          }}
-        >
-          Continue to Upload →
+        <Link href={continueHref} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111", textDecoration: "none" }}>
+          Continue to App
         </Link>
-
         <Link href="/" style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e5e7eb", textDecoration: "none" }}>
           Home
         </Link>
       </div>
+
+      <p style={{ marginTop: 16, color: "#6b7280", fontSize: 14 }}>
+        Checkout session: <code>{sessionId}</code>
+      </p>
     </main>
   );
 }
