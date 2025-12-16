@@ -29,7 +29,6 @@ export async function POST(req: Request) {
     return NextResponse.redirect(new URL("/app?error=locked", url.origin));
   }
 
-  // Ensure Blob token exists
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return NextResponse.json(
       { error: "Missing BLOB_READ_WRITE_TOKEN. Connect Vercel Blob and redeploy." },
@@ -56,13 +55,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `File too large. Max ${MAX_MB}MB.` }, { status: 400 });
     }
 
-    // Store privately (recommended for resumes)
     const key = `resumes/${payload.sid}/${Date.now()}-${safeFileName(file.name)}`;
 
+    // IMPORTANT: omit `access` to satisfy current TS types
     const blob = await put(key, file, {
-      access: "private",
       contentType: file.type || undefined,
-      addRandomSuffix: false,
+      addRandomSuffix: false
     });
 
     console.log("✅ Resume stored in Blob:", {
@@ -70,7 +68,7 @@ export async function POST(req: Request) {
       url: blob.url,
       size: file.size,
       email: payload.email,
-      sid: payload.sid,
+      sid: payload.sid
     });
 
     const url = new URL(req.url);
