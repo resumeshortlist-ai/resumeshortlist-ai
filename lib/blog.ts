@@ -3,12 +3,15 @@ export type BlogPost = {
   slug: string;
   title: string;
 
-  // Some pages use `excerpt`, others use `description`.
-  // Keep both so we never break imports.
+  // Keep both so different pages/components don't break.
   excerpt: string;
   description: string;
 
-  date: string; // YYYY-MM-DD
+  // Some pages expect dateISO.
+  dateISO: string; // ISO date string, e.g. "2025-12-01"
+  // Optional legacy alias if any page uses `date`
+  date?: string;
+
   readingTime: string; // e.g. "4 min"
   tags: string[];
   content: string; // markdown-ish plain text
@@ -22,6 +25,7 @@ export const POSTS: BlogPost[] = [
       "How to interpret an ATS-style score, what impacts it most, and how to improve it without ruining readability.",
     description:
       "How to interpret an ATS-style score, what impacts it most, and how to improve it without ruining readability.",
+    dateISO: "2025-12-01",
     date: "2025-12-01",
     readingTime: "5 min",
     tags: ["ATS", "Resume Score", "Job Search"],
@@ -47,6 +51,7 @@ A score is useful as a diagnostic: formatting issues, missing keyword coverage, 
       "A practical checklist to make your resume parseable and recruiter-friendly — without looking boring.",
     description:
       "A practical checklist to make your resume parseable and recruiter-friendly — without looking boring.",
+    dateISO: "2025-12-03",
     date: "2025-12-03",
     readingTime: "4 min",
     tags: ["ATS", "Formatting", "Resume"],
@@ -69,6 +74,7 @@ A score is useful as a diagnostic: formatting issues, missing keyword coverage, 
       "Turn task bullets into outcome bullets using a simple rewrite formula and examples.",
     description:
       "Turn task bullets into outcome bullets using a simple rewrite formula and examples.",
+    dateISO: "2025-12-05",
     date: "2025-12-05",
     readingTime: "6 min",
     tags: ["Leadership", "Executive Resume", "Bullets"],
@@ -92,7 +98,7 @@ export function getPostBySlug(slug: string): BlogPost | undefined {
   return POSTS.find((p) => p.slug === slug);
 }
 
-// Backwards-compatible helper for pages that import `getPost`
+// Some pages import `getPost`
 export function getPost(slug: string): BlogPost | undefined {
   return getPostBySlug(slug);
 }
