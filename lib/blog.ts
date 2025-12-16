@@ -1,124 +1,82 @@
-import type { Metadata } from "next";
-import Link from "next/link";
-
-export const metadata: Metadata = {
-  title: "Terms — ResumeShortList.ai",
-  description: "Terms of service for ResumeShortList.ai.",
+// lib/blog.ts
+export type BlogPost = {
+  slug: string;
+  title: string;
+  description: string;
+  date: string; // YYYY-MM-DD
+  readingTime: string; // e.g. "4 min"
+  tags: string[];
+  content: string; // markdown-ish plain text
 };
 
-export default function TermsPage() {
-  return (
-    <main className="rs-root">
-      <div className="rs-bg" aria-hidden="true" />
-      <div className="rs-bg2" aria-hidden="true" />
-      <div className="rs-grid" aria-hidden="true" />
-      <div className="rs-vignette" aria-hidden="true" />
+export const POSTS: BlogPost[] = [
+  {
+    slug: "ats-resume-score-what-it-means",
+    title: "ATS Resume Score: what it means (and what it doesn’t)",
+    description:
+      "How to interpret an ATS-style score, what impacts it most, and how to improve it without ruining readability.",
+    date: "2025-12-01",
+    readingTime: "5 min",
+    tags: ["ATS", "Resume Score", "Job Search"],
+    content: `
+### ATS scores are a signal — not the goal
+A score is useful as a diagnostic: formatting issues, missing keyword coverage, and clarity problems.
 
-      <header className="rs-header">
-        <div className="rs-header-inner">
-          <Link href="/" className="rs-brand">
-            <span className="rs-brand-dot" aria-hidden="true" />
-            <span>ResumeShortList.ai</span>
-          </Link>
+### What improves your score fastest
+- Clean structure (headings, consistent dates)
+- Role-aligned keywords (skills + tools + outcomes)
+- Strong, quantified bullets
 
-          <nav className="rs-nav" aria-label="Primary">
-            <Link href="/free-ats-resume-score" className="rs-navlink">
-              Free ATS Score
-            </Link>
-            <Link href="/how-it-works" className="rs-navlink">
-              How it works
-            </Link>
-            <Link href="/pricing" className="rs-navlink">
-              Pricing
-            </Link>
-            <Link href="/app" className="rs-cta">
-              Try the App →
-            </Link>
-          </nav>
-        </div>
-      </header>
+### What NOT to do
+- Keyword stuffing
+- Tables/columns that break parsing
+- Fancy templates that reduce readability
+`.trim(),
+  },
+  {
+    slug: "ats-friendly-formatting-checklist",
+    title: "ATS-friendly formatting checklist (copy/paste)",
+    description:
+      "A practical checklist to make your resume parseable and recruiter-friendly — without looking boring.",
+    date: "2025-12-03",
+    readingTime: "4 min",
+    tags: ["ATS", "Formatting", "Resume"],
+    content: `
+### Quick checklist
+- Use standard headings (Experience, Education, Skills)
+- Avoid tables, text boxes, and multi-column layouts
+- Use a simple font and consistent spacing
+- Keep dates consistent (e.g., 2022–2024)
+- Export to PDF carefully (text selectable)
 
-      <section className="rs-section">
-        <div className="rs-container">
-          <div className="rs-surface">
-            <h1 className="rs-h1">Terms</h1>
-            <p className="rs-sub">
-              Simple terms that protect you while staying user-friendly. You can replace with a lawyer-reviewed version later.
-            </p>
+### Bonus: bullet structure that works
+**Action + scope + impact** (with a metric whenever possible).
+`.trim(),
+  },
+  {
+    slug: "bullet-points-that-sound-executive",
+    title: "Bullet points that sound executive (without fluff)",
+    description:
+      "Turn task bullets into outcome bullets using a simple rewrite formula and examples.",
+    date: "2025-12-05",
+    readingTime: "6 min",
+    tags: ["Leadership", "Executive Resume", "Bullets"],
+    content: `
+### The rewrite formula
+**Led X** → **Led X to achieve Y** → **Led X to achieve Y by doing Z**, quantified.
 
-            <div className="rs-divider" />
+### Examples
+- “Managed projects” → “Led 6 cross-functional initiatives, reducing cycle time by 18%.”
+- “Improved process” → “Redesigned intake workflow, cutting rework by 30% and improving SLA compliance.”
 
-            <div className="rs-faq">
-              <div className="rs-faq-item">
-                <p className="rs-faq-q">Service</p>
-                <p className="rs-faq-a">
-                  ResumeShortList.ai provides resume scoring and optimization guidance. Results are informational and do not
-                  guarantee interviews or job offers.
-                </p>
-              </div>
+### The trap
+Avoid vague words (helped, assisted, involved). Replace with ownership + outcomes.
+`.trim(),
+  },
+];
 
-              <div className="rs-faq-item">
-                <p className="rs-faq-q">User content</p>
-                <p className="rs-faq-a">
-                  You own your resume content. By uploading, you grant us permission to process it to generate your score
-                  and (if purchased) optimized output.
-                </p>
-              </div>
+export const BLOG_SLUGS = POSTS.map((p) => p.slug);
 
-              <div className="rs-faq-item">
-                <p className="rs-faq-q">Payments</p>
-                <p className="rs-faq-a">
-                  Paid upgrades are processed by Stripe. Pricing is shown at checkout. Chargebacks and refunds (if any) are handled
-                  in line with your Stripe configuration and applicable consumer laws.
-                </p>
-              </div>
-
-              <div className="rs-faq-item">
-                <p className="rs-faq-q">Acceptable use</p>
-                <p className="rs-faq-a">
-                  Don’t abuse the service, attempt to disrupt it, or upload content you don’t have rights to use.
-                </p>
-              </div>
-
-              <div className="rs-faq-item">
-                <p className="rs-faq-q">Contact</p>
-                <p className="rs-faq-a">
-                  Questions:{" "}
-                  <a href="mailto:support@resumeshortlist.ai" style={{ color: "rgba(255,255,255,0.92)" }}>
-                    support@resumeshortlist.ai
-                  </a>
-                </p>
-              </div>
-            </div>
-
-            <div className="rs-actions" style={{ marginTop: 18 }}>
-              <Link href="/app" className="rs-btn rs-btn-primary">
-                Try the App
-              </Link>
-              <Link href="/privacy" className="rs-btn rs-btn-ghost">
-                Privacy →
-              </Link>
-            </div>
-          </div>
-
-          <footer className="rs-footer">
-            <div className="rs-footer-inner">
-              <div>© {new Date().getFullYear()} ResumeShortList.ai</div>
-              <div>
-                <Link className="rs-footlink" href="/privacy">
-                  Privacy
-                </Link>
-                <Link className="rs-footlink" href="/terms">
-                  Terms
-                </Link>
-                <Link className="rs-footlink" href="/contact">
-                  Contact
-                </Link>
-              </div>
-            </div>
-          </footer>
-        </div>
-      </section>
-    </main>
-  );
+export function getPostBySlug(slug: string): BlogPost | undefined {
+  return POSTS.find((p) => p.slug === slug);
 }
