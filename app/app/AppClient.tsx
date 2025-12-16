@@ -1,148 +1,260 @@
-// app/app/AppClient.tsx
 "use client";
 
-import { useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { upload } from "@vercel/blob/client";
+import { useSearchParams } from "next/navigation";
+
+type ScoreResult = {
+  ok: boolean;
+  score?: number;
+  wordCount?: number;
+  missingSections?: string[];
+  topFixes?: string[];
+  preview?: string;
+  error?: string;
+};
 
 export default function AppClient() {
   const sp = useSearchParams();
-  const sessionId = sp.get("session_id") || "";
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const sessionId = sp.get("session_id") || "";
+  const blobFromUrl = sp.get("blob") || "";
+  const canceled = sp.get("canceled") === "1";
 
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("");
-  const [blobUrl, setBlobUrl] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [jobDesc, setJobDesc] = useState("");
 
-  const canUpload = Boolean(sessionId);
+  const [file, setFile] = useState<File | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string>("");
 
-  async function onUpload() {
-    setStatus("");
-    setBlobUrl("");
+  const [score, setScore] = useState<ScoreResult | null>(null);
+  const [optResult, setOptResult] = useState<any>(null);
 
-    if (!canUpload) {
-      setStatus("Missing session_id — please complete checkout first.");
-      return;
+  const [loadingUpload, setLoadingUpload] = useState(false);
+  const [loadingPay, setLoadingPay] = useState(false);
+  const [loadingOptimize, setLoadingOptimize] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Keep the blob URL around (so payment return can still optimize)
+  useEffect(() => {
+    const stored = window.localStorage.getItem("rsl_blobUrl") || "";
+    if (!blobUrl && stored) setBlobUrl(stored);
+  }, [blobUrl]);
+
+  useEffect(() => {
+    if (blobFromUrl) {
+      setBlobUrl(blobFromUrl);
+      window.localStorage.setItem("rsl_blobUrl", blobFromUrl);
     }
+  }, [blobFromUrl]);
 
-    const file = inputRef.current?.files?.[0];
+  const canScore = !!blobUrl;
+  const canPay = !!blobUrl; // pay uses blobUrl metadata
+  const canOptimize = !!sessionId && !!blobUrl;
+
+  const headline = useMemo(() => {
+    if (canceled) return "Checkout canceled";
+    if (sessionId) return "Unlocked ✅ (payment detected in URL)";
+    return "Free ATS Score";
+  }, [canceled, sessionId]);
+
+  async function doUploadAndScore() {
+    setErr("");
+    setOptResult(null);
+    setScore(null);
+
     if (!file) {
-      setStatus("Please choose a PDF or DOCX file.");
+      setErr("Choose a PDF or DOCX resume first.");
       return;
     }
 
-    const nameLower = file.name.toLowerCase();
-    const isPdf = file.type === "application/pdf" || nameLower.endsWith(".pdf");
-    const isDocx =
-      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      nameLower.endsWith(".docx");
-
-    if (!isPdf && !isDocx) {
-      setStatus("Only PDF or DOCX is allowed.");
-      return;
-    }
-
-    setLoading(true);
+    setLoadingUpload(true);
     try {
-      const safeName = isPdf ? "resume.pdf" : "resume.docx";
+      const pathname = `resumes/${Date.now()}-${file.name.replace(/\s+/g, "_")}`;
 
-      const blob = await upload(safeName, file, {
+      const blob = await upload(pathname, file, {
         access: "public",
         handleUploadUrl: "/api/resume/upload",
-        clientPayload: JSON.stringify({ sessionId, email: email || undefined }),
+        clientPayload: JSON.stringify({ email: email || undefined, sessionId: sessionId || undefined }),
       });
 
       setBlobUrl(blob.url);
-      setStatus("Uploaded ✅");
+      window.localStorage.setItem("rsl_blobUrl", blob.url);
+
+      const res = await fetch("/api/resume/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: blob.url }),
+      });
+
+      const data = (await res.json()) as ScoreResult;
+      if (!res.ok || !data.ok) throw new Error(data.error || "Scoring failed");
+      setScore(data);
     } catch (e: any) {
-      setStatus(e?.message || "Upload failed.");
+      setErr(e?.message || "Upload/score failed");
     } finally {
-      setLoading(false);
+      setLoadingUpload(false);
+    }
+  }
+
+  async function goToCheckout() {
+    setErr("");
+    setLoadingPay(true);
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email || undefined, blobUrl }),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { url: string };
+      window.location.href = data.url;
+    } catch (e: any) {
+      setErr(e?.message || "Checkout failed");
+    } finally {
+      setLoadingPay(false);
+    }
+  }
+
+  async function optimize() {
+    setErr("");
+    setLoadingOptimize(true);
+    try {
+      const res = await fetch("/api/resume/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, url: blobUrl, jobDescription: jobDesc || undefined }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Optimize failed");
+      setOptResult(data.optimized);
+    } catch (e: any) {
+      setErr(e?.message || "Optimize failed");
+    } finally {
+      setLoadingOptimize(false);
     }
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "80px auto",
-        padding: 24,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <h1 style={{ fontSize: 40, marginBottom: 6 }}>ResumeShortlist — Upload</h1>
+    <main style={{ maxWidth: 980, margin: "70px auto", padding: 24, fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 44, marginBottom: 6 }}>ResumeShortList</h1>
+      <p style={{ marginTop: 0, color: "#444" }}>
+        {headline} — Upload your resume to get an instant score. Pay once to unlock optimization.
+      </p>
 
-      {!canUpload ? (
-        <div
-          style={{
-            padding: 14,
-            border: "1px solid #f59e0b",
-            borderRadius: 12,
-            background: "#fffbeb",
-            marginBottom: 18,
-          }}
-        >
-          <b>Payment required.</b> Complete checkout, then click “Continue to Upload” on the success page.
-        </div>
-      ) : (
-        <div
-          style={{
-            padding: 14,
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            background: "#f9fafb",
-            marginBottom: 18,
-          }}
-        >
-          Payment session detected ✅ You can upload now.
-        </div>
-      )}
+      <div style={{ border: "1px solid #ddd", borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "grid", gap: 10 }}>
+          <label style={{ fontWeight: 600 }}>Email (optional)</label>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@email.com"
+            style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+          />
 
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 20 }}>
-        <label style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>Email (optional)</label>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@email.com"
-          style={{ width: "100%", padding: 10, marginBottom: 16 }}
-        />
+          <label style={{ fontWeight: 600 }}>Resume (PDF or DOCX)</label>
+          <input
+            type="file"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+          />
 
-        <label style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>Resume (PDF or DOCX)</label>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        />
-
-        <div style={{ marginTop: 16 }}>
           <button
-            onClick={onUpload}
-            disabled={loading || !canUpload}
+            onClick={doUploadAndScore}
+            disabled={loadingUpload}
             style={{
-              padding: "10px 16px",
+              padding: "10px 14px",
               borderRadius: 10,
               border: "1px solid #111",
-              background: loading || !canUpload ? "#999" : "#111",
+              background: "#111",
               color: "#fff",
-              cursor: loading || !canUpload ? "not-allowed" : "pointer",
-              fontWeight: 700,
+              cursor: "pointer",
+              width: "fit-content",
             }}
           >
-            {loading ? "Uploading..." : "Upload Resume"}
+            {loadingUpload ? "Uploading + Scoring…" : "Get Free Score"}
           </button>
+
+          {blobUrl ? (
+            <div style={{ fontSize: 12, color: "#666" }}>
+              Uploaded: <code>{blobUrl.slice(0, 60)}…</code>
+            </div>
+          ) : null}
         </div>
 
-        {status ? <div style={{ marginTop: 14 }}>{status}</div> : null}
-        {blobUrl ? (
-          <div style={{ marginTop: 10, fontSize: 14 }}>
-            Stored at:{" "}
-            <a href={blobUrl} target="_blank" rel="noreferrer">
-              {blobUrl}
-            </a>
+        {score ? (
+          <div style={{ marginTop: 18, borderTop: "1px solid #eee", paddingTop: 18 }}>
+            <h2 style={{ margin: "0 0 8px" }}>Score: {score.score}/100</h2>
+            <p style={{ marginTop: 0, color: "#555" }}>Word count: {score.wordCount}</p>
+
+            <h3 style={{ marginBottom: 6 }}>Top fixes</h3>
+            <ul style={{ marginTop: 0 }}>
+              {(score.topFixes || []).map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+
+            <button
+              onClick={goToCheckout}
+              disabled={loadingPay || !canPay}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #111",
+                background: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              {loadingPay ? "Redirecting…" : "Optimize + Export (one-time) — $24.99"}
+            </button>
           </div>
         ) : null}
+
+        {sessionId ? (
+          <div style={{ marginTop: 18, borderTop: "1px solid #eee", paddingTop: 18 }}>
+            <h2 style={{ margin: "0 0 8px" }}>Paid unlock detected ✅</h2>
+            <p style={{ marginTop: 0, color: "#555" }}>
+              Optional: paste a job description to tailor keywords.
+            </p>
+            <textarea
+              value={jobDesc}
+              onChange={(e) => setJobDesc(e.target.value)}
+              placeholder="Paste a job description here (optional)…"
+              rows={6}
+              style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+            />
+
+            <div style={{ marginTop: 12 }}>
+              <button
+                onClick={optimize}
+                disabled={loadingOptimize || !canOptimize}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #111",
+                  background: "#111",
+                  color: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                {loadingOptimize ? "Optimizing…" : "Generate Optimized Output"}
+              </button>
+            </div>
+
+            {optResult ? (
+              <div style={{ marginTop: 14, border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+                <h3 style={{ marginTop: 0 }}>Optimization pack</h3>
+                <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                  {JSON.stringify(optResult, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {err ? <div style={{ color: "crimson", marginTop: 12 }}>Error: {err}</div> : null}
       </div>
     </main>
   );
