@@ -138,11 +138,6 @@ def _fallback_analysis() -> Dict[str, Any]:
     }
 
 def _price_id_for_key(key: str) -> Optional[str]:
-    """
-    Supports both naming patterns:
-      - STRIPE_PRICE_ENTRY / STRIPE_PRICE_MID / ...
-      - PRICE_ENTRY / PRICE_MID / ... (legacy)
-    """
     normalized = (key or "").strip().upper()
     return (
         os.environ.get(f"STRIPE_PRICE_{normalized}")
@@ -153,11 +148,9 @@ def _interview_price_id() -> Optional[str]:
     return os.environ.get("STRIPE_PRICE_INTERVIEW") or os.environ.get("PRICE_INTERVIEW")
 
 async def analyze_resume_text(text: str) -> Dict[str, Any]:
-    # If no OpenAI key, return mock (so the API still works)
     if not openai_client:
         return _fallback_analysis()
 
-    # Strict, high-converting, executive-grade audit prompt
     system_msg = """
 You are a strict, high-end Resume Auditor. Your job is to analyze resumes and justify the need for a professional rewrite.
 
@@ -197,7 +190,6 @@ Return ONLY valid JSON with this schema:
     user_prompt = f"Analyze this resume:\n\n{text[:12000]}"
 
     try:
-        # Use Chat Completions with enforced JSON object formatting
         resp = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -210,10 +202,8 @@ Return ONLY valid JSON with this schema:
 
         content = resp.choices[0].message.content or ""
         content = _clean_json_like(content)
-
         data = json.loads(content)
 
-        # Normalize and defend against missing fields
         score_val = int(data.get("score", 60))
         score_val = max(0, min(100, score_val))
 
@@ -273,10 +263,8 @@ async def analyze_resume(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Could not extract text from file")
 
     analysis = await analyze_resume_text(text)
-
     upload_id = str(uuid.uuid4())
 
-    # Save minimal upload metadata if DB is configured
     if db:
         try:
             await db.uploads.insert_one(
@@ -291,14 +279,12 @@ async def analyze_resume(file: UploadFile = File(...)):
         except Exception as e:
             logger.error(f"DB insert failed (uploads). Continuing without DB. Error: {e}")
 
-    # Return keys compatible with your frontend
     return {
         "upload_id": upload_id,
         "filename": file.filename,
         "score": analysis["score"],
         "summary": analysis["summary"],
         "suggested_tier": analysis["suggested_tier"],
-        # keep both names to avoid frontend mismatch
         "bullet_recommendations": analysis["bullet_recommendations"],
         "bullets": analysis["bullet_recommendations"],
         "gap_analysis": analysis["gap_analysis"],
@@ -321,7 +307,6 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
             raise HTTPException(status_code=400, detail="Interview prep selected but price not configured")
         line_items.append({"price": interview_price_id, "quantity": 1})
 
-    # Determine base URL from request origin if present (helps multi-env)
     base_url = os.environ.get("FRONTEND_URL", FRONTEND_URL)
     if req.headers.get("origin"):
         base_url = req.headers.get("origin")
@@ -356,7 +341,6 @@ async def verify_session(session_id: str = Form(...)):
         if session.payment_status == "paid":
             metadata = session.metadata or {}
 
-            # Save order to DB if available
             if db:
                 try:
                     await db.orders.insert_one(
@@ -384,16 +368,29 @@ async def verify_session(session_id: str = Form(...)):
 app.include_router(api_router)
 
 # -----------------------------
-# CORS
+# CORS (ROBUST)
 # -----------------------------
-cors_raw = os.environ.get("CORS_ORIGINS", "*")
-origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
+# Recommended: set CORS_ORIGINS to a comma-separated list of exact domains.
+# Example:
+# CORS_ORIGINS=https://resumeshortlist.app,https://resumeshortlist-ai.vercel.app
+cors_raw = os.environ.get("CORS_ORIGINS", "").strip()
 
-# If using wildcard, do NOT allow credentials (browsers will reject it)
-allow_credentials = True
-if "*" in origins:
-    allow_credentials = False
+# Optional dev escape hatch:
+# If you set CORS_ALLOW_ALL=true, it will allow all origins (NO credentials).
+cors_allow_all = os.environ.get("CORS_ALLOW_ALL", "false").lower() in ("1", "true", "yes")
+
+origins: List[str] = []
+if cors_raw:
+    origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
+
+# If allow-all is enabled OR no origins provided, allow "*"
+# NOTE: when origins="*" you cannot use allow_credentials=True.
+if cors_allow_all or not origins:
+    logger.warning("CORS is set to allow all origins. Credentials will be disabled.")
     origins = ["*"]
+    allow_credentials = False
+else:
+    allow_credentials = True
 
 app.add_middleware(
     CORSMiddleware,
