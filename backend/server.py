@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, timezone
 import io
 import json
-import re
 
 import pypdf
 import docx
@@ -33,7 +32,6 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 # OpenAI
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # MongoDB (optional; do not crash if missing)
@@ -61,15 +59,6 @@ api_router = APIRouter(prefix="/api")
 # -----------------------------
 # Models
 # -----------------------------
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
 class CheckoutRequest(BaseModel):
     # expected: ENTRY, MID, SENIOR, EXEC, CSUITE
     price_key: str
@@ -77,17 +66,8 @@ class CheckoutRequest(BaseModel):
     upload_id: Optional[str] = None
     email: Optional[str] = None
 
-class ResumeAnalysisResponse(BaseModel):
-    score: int
-    summary: str
-    suggested_tier: str
-    bullet_recommendations: List[str]
-    gap_analysis: List[dict]
-    filename: str
-    upload_id: Optional[str] = None
-
 # -----------------------------
-# Helpers - Text Extraction
+# Helpers
 # -----------------------------
 def extract_text_from_pdf(file_content: bytes) -> str:
     try:
@@ -112,23 +92,25 @@ def extract_text_from_docx(file_content: bytes) -> str:
         logger.error(f"Error reading DOCX: {e}")
         return ""
 
-def _clean_json_like(content: str) -> str:
-    c = (content or "").strip()
-    if "```json" in c:
-        c = c.split("```json", 1)[1].split("```", 1)[0].strip()
-    elif "```" in c:
-        c = c.split("```", 1)[1].split("```", 1)[0].strip()
-    return c
+def _fallback_analysis() -> Dict[str, Any]:
+    return {
+        "score": 65,
+        "summary": "Mock Analysis: Good content but missing strategic KPIs and clear impact signals.",
+        "suggested_tier": "MID",
+        "bullet_recommendations": [
+            "Quantify achievements with metrics ($, %, volume, team size).",
+            "Replace passive phrasing with leadership verbs (Led, Owned, Delivered).",
+            "Tighten the top third with a targeted headline + role-relevant keywords.",
+            "Remove generic objectives; add a focused positioning statement."
+        ],
+        "gap_analysis": [
+            {"category": "Impact", "finding": "Missing quantifiable metrics tied to outcomes (revenue, savings, growth)."},
+            {"category": "ATS Compliance", "finding": "Formatting and section structure may reduce parsing accuracy in ATS."},
+            {"category": "Targeting", "finding": "Keywords and role signal are not specific enough for shortlist ranking."}
+        ]
+    }
 
-# -----------------------------
-# Helpers - Pricing Env Vars
-# -----------------------------
 def _price_id_for_key(key: str) -> Optional[str]:
-    """
-    Supports both naming patterns:
-      - STRIPE_PRICE_ENTRY / STRIPE_PRICE_MID / ...
-      - PRICE_ENTRY / PRICE_MID / ... (legacy)
-    """
     normalized = (key or "").strip().upper()
     return (
         os.environ.get(f"STRIPE_PRICE_{normalized}")
@@ -138,108 +120,9 @@ def _price_id_for_key(key: str) -> Optional[str]:
 def _interview_price_id() -> Optional[str]:
     return os.environ.get("STRIPE_PRICE_INTERVIEW") or os.environ.get("PRICE_INTERVIEW")
 
-# -----------------------------
-# Helpers - Tier Heuristic
-# -----------------------------
-def _guess_tier_from_text(text: str) -> str:
-    t = (text or "").lower()
-
-    # Strong executive / c-suite signals
-    c_suite_terms = [
-        "chief", "cfo", "ceo", "coo", "cio", "cto", "c-suite", "svp", "president", "vp ", "vice president"
-    ]
-    exec_terms = [
-        "director", "head of", "global head", "executive", "md ", "managing director", "partner"
-    ]
-    senior_terms = [
-        "manager", "team lead", "lead,", "senior manager", "sr manager"
-    ]
-
-    if any(term in t for term in c_suite_terms):
-        return "CSUITE" if ("ceo" in t or "cfo" in t or "coo" in t or "chief" in t or "svp" in t or "president" in t) else "EXEC"
-
-    if any(term in t for term in exec_terms):
-        return "EXEC"
-
-    if any(term in t for term in senior_terms):
-        return "SENIOR"
-
-    # Rough year-count heuristic (very imperfect but helpful)
-    years = re.findall(r"\b(19\d{2}|20\d{2})\b", t)
-    if len(years) >= 6:
-        return "SENIOR"
-    if len(years) >= 10:
-        return "EXEC"
-
-    return "MID"
-
-# -----------------------------
-# Helpers - Fallback Analysis
-# -----------------------------
-def _fallback_analysis(tier_hint: str) -> Dict[str, Any]:
-    tier = (tier_hint or "MID").upper()
-
-    # Tailor language slightly by tier so it feels “real”
-    if tier in ("EXEC", "CSUITE"):
-        bullets = [
-            "Move the top 1/3 to an executive positioning summary (scope, mandate, P&L, enterprise outcomes).",
-            "Convert responsibilities into measurable outcomes (revenue, EBITDA, cost-to-serve, cycle time, risk).",
-            "Add leadership scope (team size, regions, stakeholders, governance, board / ExCo exposure).",
-            "Tighten role targeting with a keyword spine aligned to the roles you want (Ops/Strategy/COO track).",
-        ]
-        gaps = [
-            {"category": "Impact", "finding": "Executive outcomes aren’t quantified consistently (enterprise-scale metrics and before/after results are missing)."},
-            {"category": "Positioning", "finding": "The narrative reads ‘experienced operator’ but not ‘enterprise leader’ (mandate, decision rights, governance, and scale need to be explicit)."},
-            {"category": "Shortlist Signal", "finding": "Top-third keywords and headline do not force the target role (COO/Head of Ops/Strategy & Ops) quickly enough for recruiter scan patterns."},
-        ]
-        summary = "This resume contains strong experience, but it under-sells enterprise scope and measurable outcomes. A tighter executive story with quantified impact will materially improve shortlist probability."
-        score = 68
-    elif tier == "SENIOR":
-        bullets = [
-            "Add outcome metrics to every key role (revenue, savings, throughput, SLA, cycle time, NPS).",
-            "Make leadership explicit: team size, cross-functional partners, and programs you owned end-to-end.",
-            "Rebuild bullets into 'Action → Result → Proof' (what you did, what changed, how measured).",
-            "Improve targeting: mirror keywords from the job description in the top third and role bullets.",
-        ]
-        gaps = [
-            {"category": "Impact", "finding": "Several bullets describe tasks, not outcomes; recruiters rank on results, not responsibilities."},
-            {"category": "Leadership", "finding": "Scope of leadership and ownership isn’t consistently clear (team size, budget, decision rights)."},
-            {"category": "ATS / Scanability", "finding": "Top section doesn’t front-load the strongest keywords + achievements; scan patterns will miss key strengths."},
-        ]
-        summary = "The experience is credible, but impact and leadership scope are not surfaced fast or quantified enough. Small, targeted rewrites will improve ranking and recruiter conversion."
-        score = 62
-    else:
-        bullets = [
-            "Quantify outcomes wherever possible ($, %, volume, time saved, growth).",
-            "Replace passive phrasing (“responsible for”) with leadership verbs (led/owned/delivered).",
-            "Improve targeting: align keywords and skill clusters to the role you’re applying for.",
-            "Tighten formatting for ATS (clear headings, consistent dates, simple structure).",
-        ]
-        gaps = [
-            {"category": "Impact", "finding": "Too many statements are qualitative; add measurable proof of results."},
-            {"category": "Targeting", "finding": "Keyword alignment to the target role is inconsistent, lowering ranking."},
-            {"category": "Clarity", "finding": "Key wins aren’t front-loaded; recruiters may miss them in a quick scan."},
-        ]
-        summary = "Good foundation, but it needs clearer results, targeting, and ATS-first structure. With small changes, it will rank higher and convert better."
-        score = 60
-
-    return {
-        "score": score,
-        "summary": summary,
-        "suggested_tier": tier,
-        "bullet_recommendations": bullets,
-        "gap_analysis": gaps,
-    }
-
-# -----------------------------
-# OpenAI Analysis
-# -----------------------------
 async def analyze_resume_text(text: str) -> Dict[str, Any]:
-    tier_hint = _guess_tier_from_text(text)
-
-    # If no OpenAI key, return strong fallback
     if not openai_client:
-        return _fallback_analysis(tier_hint)
+        return _fallback_analysis()
 
     system_msg = """
 You are a strict, high-end Resume Auditor. Your job is to analyze resumes and justify the need for a professional rewrite.
@@ -253,7 +136,7 @@ Rules:
 2) Scoring:
    - Be strict. Average score should be 45–65.
    - >75 only if genuinely excellent.
-3) Gap analysis:
+3) Gap analysis (most important):
    - Provide 3 distinct, harsh-but-true reasons this resume will fail.
    - Be specific (e.g., "Fails to quantify sales impact in 2023 role").
 4) Tier detection:
@@ -281,7 +164,7 @@ Return ONLY valid JSON with this schema:
 
     try:
         resp = openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
@@ -289,10 +172,7 @@ Return ONLY valid JSON with this schema:
             temperature=0.2,
             response_format={"type": "json_object"},
         )
-
-        content = resp.choices[0].message.content or ""
-        content = _clean_json_like(content)
-        data = json.loads(content)
+        data = json.loads(resp.choices[0].message.content or "{}")
 
         score_val = int(data.get("score", 60))
         score_val = max(0, min(100, score_val))
@@ -305,37 +185,22 @@ Return ONLY valid JSON with this schema:
         if not isinstance(gaps, list):
             gaps = []
 
-        suggested = (data.get("suggested_tier") or tier_hint).strip().upper()
-        if suggested not in {"ENTRY", "MID", "SENIOR", "EXEC", "CSUITE"}:
-            suggested = tier_hint
-
-        # Ensure we always have usable content
-        if len(bullets) < 3 or len(gaps) < 2:
-            fallback = _fallback_analysis(suggested)
-            bullets = (bullets + fallback["bullet_recommendations"])[:4]
-            gaps = (gaps + fallback["gap_analysis"])[:3]
-
         return {
             "score": score_val,
             "summary": data.get("summary", "Analysis incomplete."),
-            "suggested_tier": suggested,
+            "suggested_tier": (data.get("suggested_tier") or "MID").strip().upper(),
             "bullet_recommendations": bullets[:4],
             "gap_analysis": gaps[:3],
         }
-
     except Exception as e:
-        # This is your current real issue: 429 + insufficient_quota
         logger.error(f"OpenAI analysis error: {e}")
-
-        # Always return a GOOD fallback (never blank)
-        fallback = _fallback_analysis(tier_hint)
-        fallback["score"] = 55
-        fallback["summary"] = "Automated analysis failed. Manual review required."
-        fallback["gap_analysis"] = [
-            {"category": "Error", "finding": "AI analysis unavailable (quota/limit). Showing best-effort audit."},
-            *fallback["gap_analysis"],
-        ][:3]
-        return fallback
+        return {
+            "score": 55,
+            "summary": "Automated analysis failed. Manual review required.",
+            "suggested_tier": "MID",
+            "bullet_recommendations": ["Resubmit for detailed analysis.", "Ensure the file is text-readable (not scanned)."],
+            "gap_analysis": [{"category": "Error", "finding": "System could not process this file deeply."}],
+        }
 
 # -----------------------------
 # Routes
@@ -346,28 +211,19 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    return {
-        "ok": True,
-        "db": bool(db),
-        "openai": bool(openai_client),
-        "model": OPENAI_MODEL,
-    }
+    return {"ok": True, "db": bool(db), "openai": bool(openai_client)}
 
 @api_router.post("/analyze")
 async def analyze_resume(file: UploadFile = File(...)):
     content = await file.read()
     filename = (file.filename or "resume").lower()
 
-    text = ""
     if filename.endswith(".pdf"):
         text = extract_text_from_pdf(content)
     elif filename.endswith(".docx") or filename.endswith(".doc"):
         text = extract_text_from_docx(content)
     else:
-        try:
-            text = content.decode("utf-8")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Unsupported file format")
+        raise HTTPException(status_code=400, detail="Unsupported file format")
 
     if not text.strip():
         raise HTTPException(status_code=400, detail="Could not extract text from file")
@@ -382,23 +238,22 @@ async def analyze_resume(file: UploadFile = File(...)):
                     "id": upload_id,
                     "filename": file.filename,
                     "timestamp": datetime.now(timezone.utc),
-                    "score": analysis.get("score"),
+                    "score": analysis["score"],
                     "text_preview": text[:200],
                 }
             )
         except Exception as e:
             logger.error(f"DB insert failed (uploads). Continuing without DB. Error: {e}")
 
-    # IMPORTANT: return keys your UI expects
     return {
         "upload_id": upload_id,
         "filename": file.filename,
-        "score": analysis.get("score", 60),
-        "summary": analysis.get("summary", "Analysis complete."),
-        "suggested_tier": analysis.get("suggested_tier", "MID"),
-        "bullet_recommendations": analysis.get("bullet_recommendations", []),
-        "bullets": analysis.get("bullet_recommendations", []),  # alias for older UI
-        "gap_analysis": analysis.get("gap_analysis", []),
+        "score": analysis["score"],
+        "summary": analysis["summary"],
+        "suggested_tier": analysis["suggested_tier"],
+        "bullet_recommendations": analysis["bullet_recommendations"],
+        "bullets": analysis["bullet_recommendations"],  # compatibility
+        "gap_analysis": analysis["gap_analysis"],
     }
 
 @api_router.post("/checkout")
@@ -474,7 +329,6 @@ async def verify_session(session_id: str = Form(...)):
             }
 
         return {"status": "unpaid"}
-
     except Exception as e:
         logger.error(f"Verify session error: {e}")
         raise HTTPException(status_code=400, detail="Invalid Session")
@@ -483,12 +337,12 @@ async def verify_session(session_id: str = Form(...)):
 app.include_router(api_router)
 
 # -----------------------------
-# CORS
+# CORS (FIXED)
 # -----------------------------
 cors_raw = os.environ.get("CORS_ORIGINS", "*")
 origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
 
-# If wildcard, browsers require allow_credentials=False
+# ✅ Key rule: if origins includes "*" then allow_credentials MUST be False
 allow_credentials = True
 if "*" in origins:
     allow_credentials = False
