@@ -1,10 +1,9 @@
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel
 from typing import List, Optional, Any, Dict
 import os
 import logging
@@ -12,14 +11,11 @@ import uuid
 from datetime import datetime, timezone
 import io
 import json
+import re
 
 import pypdf
 import docx
 import stripe
-
-# NOTE:
-# This version removes emergentintegrations dependency (it was failing on Render).
-# It uses OpenAI directly if OPENAI_API_KEY is set; otherwise it returns a stable mock analysis.
 from openai import OpenAI
 
 # -----------------------------
@@ -33,7 +29,6 @@ logger = logging.getLogger("resumeshortlist-backend")
 
 # Stripe
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 # OpenAI
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -64,30 +59,12 @@ api_router = APIRouter(prefix="/api")
 # -----------------------------
 # Models
 # -----------------------------
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
 class CheckoutRequest(BaseModel):
     # expected: ENTRY, MID, SENIOR, EXEC, CSUITE
     price_key: str
     include_interview_prep: bool = False
     upload_id: Optional[str] = None
     email: Optional[str] = None
-
-class ResumeAnalysisResponse(BaseModel):
-    score: int
-    summary: str
-    suggested_tier: str
-    bullet_recommendations: List[str]
-    gap_analysis: List[dict]
-    filename: str
-    upload_id: Optional[str] = None
 
 # -----------------------------
 # Helpers
@@ -97,8 +74,7 @@ def extract_text_from_pdf(file_content: bytes) -> str:
         pdf_reader = pypdf.PdfReader(io.BytesIO(file_content))
         text = ""
         for page in pdf_reader.pages:
-            page_text = page.extract_text() or ""
-            text += page_text + "\n"
+            text += (page.extract_text() or "") + "\n"
         return text
     except Exception as e:
         logger.error(f"Error reading PDF: {e}")
@@ -115,34 +91,21 @@ def extract_text_from_docx(file_content: bytes) -> str:
         logger.error(f"Error reading DOCX: {e}")
         return ""
 
-def _safe_default(exec_default: bool = True) -> Dict[str, Any]:
-    tier = "EXEC" if exec_default else "MID"
+def _fallback_analysis(tier_hint: str = "MID") -> Dict[str, Any]:
     return {
         "score": 62,
-        "summary": (
-            "Your resume contains credible experience, but the signal is not being presented in a way that consistently survives modern ATS ranking and recruiter scan patterns. "
-            "The top third is not extracting your real scope, leadership level, and quantified outcomes fast enough."
-        ),
-        "suggested_tier": tier,
+        "summary": "Your resume has credible experience, but it is under-positioned for modern ATS + recruiter scan patterns.",
+        "suggested_tier": tier_hint,
         "bullet_recommendations": [
-            "Rewrite top-third positioning: add a decisive headline + 3-line value proposition aligned to target roles.",
-            "Convert responsibility bullets into outcomes with metrics ($, %, scale, team size, scope).",
-            "Add leadership signal: ownership, decision-rights, cross-functional influence, transformation outcomes.",
-            "Fix ATS structure: consistent headings, remove dense blocks, ensure clean parsing (avoid tables/columns if present).",
+            "Add metrics ($, %, volume, team size) to 70%+ of bullets.",
+            "Replace passive phrasing with ownership verbs (Led, Owned, Delivered, Drove).",
+            "Tighten the top third with a targeted headline + role-specific keywords.",
+            "Rebuild bullets around outcomes, not responsibilities."
         ],
         "gap_analysis": [
-            {
-                "category": "Impact Signal",
-                "finding": "Recruiters can’t quickly see quantified outcomes (revenue, savings, growth, scale), so ranking drops before interviews are considered.",
-            },
-            {
-                "category": "Positioning",
-                "finding": "Your leadership scope and decision-rights are under-stated, which can misclassify you into lower tiers during recruiter triage.",
-            },
-            {
-                "category": "ATS + Keywords",
-                "finding": "Section structure and keyword alignment are not engineered to match role requirements, increasing early-stage filtering risk.",
-            },
+            {"category": "Impact", "finding": "You describe duties, but you don’t quantify outcomes (revenue, savings, growth, scope)."},
+            {"category": "Targeting", "finding": "Role signal is diluted; the resume reads generalist, which lowers ranking for specific roles."},
+            {"category": "ATS Compliance", "finding": "Formatting/structure may reduce parsing accuracy across ATS variants."}
         ],
     }
 
@@ -153,77 +116,117 @@ def _price_id_for_key(key: str) -> Optional[str]:
       - PRICE_ENTRY / PRICE_MID / ... (legacy)
     """
     normalized = (key or "").strip().upper()
-    return (
-        os.environ.get(f"STRIPE_PRICE_{normalized}")
-        or os.environ.get(f"PRICE_{normalized}")
-    )
+    return os.environ.get(f"STRIPE_PRICE_{normalized}") or os.environ.get(f"PRICE_{normalized}")
 
 def _interview_price_id() -> Optional[str]:
     return os.environ.get("STRIPE_PRICE_INTERVIEW") or os.environ.get("PRICE_INTERVIEW")
 
-def _exec_signal_hits(text: str) -> int:
-    upper = (text or "").upper()
-    markers = [
-        "DIRECTOR", "VICE PRESIDENT", "VP", "SVP", "EVP", "CFO", "COO", "CEO", "CHIEF",
-        "GLOBAL", "ENTERPRISE", "P&L", "BUDGET", "BOARD", "TRANSFORMATION", "OPERATING MODEL"
-    ]
-    return sum(1 for m in markers if m in upper)
+def _infer_tier_heuristic(text: str) -> str:
+    t = (text or "").lower()
+
+    # Strong signals
+    if re.search(r"\b(ceo|cfo|coo|cto|cio|chief\s+officer|svp|evp|president)\b", t):
+        return "CSUITE"
+    if re.search(r"\b(vice\s+president|vp\b|director|head\s+of)\b", t):
+        return "EXEC"
+    if re.search(r"\b(senior\s+manager|manager|team\s+lead|lead\b)\b", t):
+        return "SENIOR"
+
+    # Weak signals
+    if re.search(r"\b(intern|student|new\s+grad|graduate)\b", t):
+        return "ENTRY"
+
+    return "MID"
+
+def _normalize_analysis(data: Dict[str, Any], tier_hint: str) -> Dict[str, Any]:
+    # Score
+    try:
+        score_val = int(data.get("score", 60))
+    except Exception:
+        score_val = 60
+    score_val = max(0, min(100, score_val))
+
+    # Tier
+    tier = (data.get("suggested_tier") or tier_hint or "MID").strip().upper()
+    if tier not in {"ENTRY", "MID", "SENIOR", "EXEC", "CSUITE"}:
+        tier = tier_hint
+
+    # Bullets
+    bullets = data.get("bullet_recommendations") or data.get("bullets") or []
+    if not isinstance(bullets, list):
+        bullets = []
+    bullets = [str(b).strip() for b in bullets if str(b).strip()]
+    if len(bullets) < 3:
+        bullets = (_fallback_analysis(tier_hint)["bullet_recommendations"])[:4]
+
+    # Gaps
+    gaps = data.get("gap_analysis") or []
+    if not isinstance(gaps, list):
+        gaps = []
+    cleaned_gaps = []
+    for g in gaps:
+        if isinstance(g, dict) and g.get("category") and g.get("finding"):
+            cleaned_gaps.append({"category": str(g["category"]).strip(), "finding": str(g["finding"]).strip()})
+    if len(cleaned_gaps) < 2:
+        cleaned_gaps = _fallback_analysis(tier_hint)["gap_analysis"]
+
+    summary = str(data.get("summary") or _fallback_analysis(tier_hint)["summary"]).strip()
+
+    return {
+        "score": score_val,
+        "summary": summary,
+        "suggested_tier": tier,
+        "bullet_recommendations": bullets[:4],
+        "gap_analysis": cleaned_gaps[:3],
+    }
 
 async def analyze_resume_text(text: str) -> Dict[str, Any]:
-    """
-    Always returns:
-      - score (0-100)
-      - summary (2 sentences)
-      - suggested_tier: ENTRY|MID|SENIOR|EXEC|CSUITE
-      - bullet_recommendations: 4 items
-      - gap_analysis: 3 items {category,finding}
-    Adds exec override if resume contains exec markers and model under-tiers.
-    """
-    hits = _exec_signal_hits(text)
-    exec_default = hits >= 2
+    tier_hint = _infer_tier_heuristic(text)
 
-    # If no OpenAI configured, return deterministic defaults
+    # If OpenAI not configured, return fallback
     if not openai_client:
-        return _safe_default(exec_default=exec_default)
+        return _fallback_analysis(tier_hint)
 
     system_msg = """
 You are a strict, executive-grade Resume Auditor.
 
-You MUST return ONLY valid JSON that matches this exact schema:
+Goal:
+- Produce a harsh-but-true ATS + recruiter triage audit.
+- Provide actionable, specific fixes (not generic advice).
+- Classify tier correctly.
+
+Rules:
+1) Be strict. Average score: 45–65. >75 only if genuinely excellent.
+2) Gap analysis must be 3 distinct, specific reasons this resume fails.
+3) Bullet recommendations must be 3–4 very concrete edits.
+4) Tier definitions:
+   ENTRY (0–2 yrs), MID (2–7), SENIOR (7–12), EXEC (12+ Director/VP), CSUITE (C-level/SVP/Founder)
+
+Return ONLY valid JSON with this schema:
 {
   "score": 0-100,
-  "summary": "Exactly 2 sentences.",
+  "summary": "2 sentences",
   "suggested_tier": "ENTRY|MID|SENIOR|EXEC|CSUITE",
   "bullet_recommendations": ["...", "...", "...", "..."],
   "gap_analysis": [
-    {"category":"Impact Signal","finding":"..."},
-    {"category":"Positioning","finding":"..."},
-    {"category":"ATS + Keywords","finding":"..."}
+    {"category":"Impact","finding":"..."},
+    {"category":"ATS Compliance","finding":"..."},
+    {"category":"Targeting","finding":"..."}
   ]
 }
-
-Rules:
-- Be strict (average 45–65; >75 is rare).
-- bullet_recommendations MUST be 4 items, concrete and action-oriented.
-- gap_analysis MUST be 3 items and each finding must be specific (what fails + why it causes filtering).
-- Tier detection:
-  ENTRY 0–2 yrs
-  MID 2–7 yrs
-  SENIOR 7–12 yrs
-  EXEC 12+ yrs or Director/VP scope
-  CSUITE C-level/SVP/Founder
 """.strip()
 
     user_prompt = f"""
-Analyze the resume below. If parts are messy, infer structure and still produce a best-effort audit.
+Tier hint (heuristic, may be wrong): {tier_hint}
 
-Resume text:
-{text[:12000]}
+Analyze this resume text:
+
+{text[:14000]}
 """.strip()
 
     try:
         resp = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
@@ -232,60 +235,24 @@ Resume text:
             response_format={"type": "json_object"},
         )
 
-        content = resp.choices[0].message.content or "{}"
+        content = resp.choices[0].message.content or ""
         data = json.loads(content)
-
-        # Normalize and enforce structure
-        score_val = int(data.get("score", 60))
-        score_val = max(0, min(100, score_val))
-
-        summary = (data.get("summary") or "").strip()
-        if not summary:
-            summary = _safe_default(exec_default=exec_default)["summary"]
-
-        tier = (data.get("suggested_tier") or "MID").strip().upper()
-        if tier not in {"ENTRY", "MID", "SENIOR", "EXEC", "CSUITE"}:
-            tier = "MID"
-
-        bullets = data.get("bullet_recommendations") or []
-        if not isinstance(bullets, list):
-            bullets = []
-        bullets = [str(b).strip() for b in bullets if str(b).strip()]
-        defaults = _safe_default(exec_default=exec_default)["bullet_recommendations"]
-        while len(bullets) < 4:
-            bullets.append(defaults[len(bullets)])
-        bullets = bullets[:4]
-
-        gaps = data.get("gap_analysis") or []
-        if not isinstance(gaps, list):
-            gaps = []
-        cleaned_gaps = []
-        for g in gaps:
-            if isinstance(g, dict):
-                cat = str(g.get("category", "")).strip() or "General"
-                finding = str(g.get("finding", "")).strip()
-                if finding:
-                    cleaned_gaps.append({"category": cat, "finding": finding})
-        defaults_g = _safe_default(exec_default=exec_default)["gap_analysis"]
-        while len(cleaned_gaps) < 3:
-            cleaned_gaps.append(defaults_g[len(cleaned_gaps)])
-        cleaned_gaps = cleaned_gaps[:3]
-
-        # Executive override: if exec signals present, don't allow MID as final
-        if exec_default and tier in {"MID", "SENIOR"}:
-            tier = "EXEC"
-
-        return {
-            "score": score_val,
-            "summary": summary,
-            "suggested_tier": tier,
-            "bullet_recommendations": bullets,
-            "gap_analysis": cleaned_gaps,
-        }
+        return _normalize_analysis(data, tier_hint)
 
     except Exception as e:
         logger.error(f"OpenAI analysis error: {e}")
-        return _safe_default(exec_default=exec_default)
+        return {
+            "score": 55,
+            "summary": "Automated analysis failed. Manual review required.",
+            "suggested_tier": tier_hint,
+            "bullet_recommendations": [
+                "Resubmit for detailed analysis.",
+                "Ensure the file is text-readable (not scanned).",
+                "Try exporting your resume as a text-based PDF (not an image).",
+                "Remove unusual fonts/graphics that can break parsing."
+            ],
+            "gap_analysis": [{"category": "Error", "finding": "System could not process this file deeply."}],
+        }
 
 # -----------------------------
 # Routes
@@ -320,7 +287,7 @@ async def analyze_resume(file: UploadFile = File(...)):
     analysis = await analyze_resume_text(text)
     upload_id = str(uuid.uuid4())
 
-    # Save minimal metadata if DB is configured
+    # Save minimal metadata if DB configured
     if db:
         try:
             await db.uploads.insert_one(
@@ -329,13 +296,14 @@ async def analyze_resume(file: UploadFile = File(...)):
                     "filename": file.filename,
                     "timestamp": datetime.now(timezone.utc),
                     "score": analysis["score"],
-                    "text_preview": text[:200],
+                    "tier": analysis["suggested_tier"],
+                    "text_preview": text[:400],
                 }
             )
         except Exception as e:
             logger.error(f"DB insert failed (uploads). Continuing without DB. Error: {e}")
 
-    # Return stable keys that frontend should render
+    # IMPORTANT: return keys your UI expects (and keep aliases)
     return {
         "upload_id": upload_id,
         "filename": file.filename,
@@ -343,6 +311,7 @@ async def analyze_resume(file: UploadFile = File(...)):
         "summary": analysis["summary"],
         "suggested_tier": analysis["suggested_tier"],
         "bullet_recommendations": analysis["bullet_recommendations"],
+        "bullets": analysis["bullet_recommendations"],
         "gap_analysis": analysis["gap_analysis"],
     }
 
@@ -353,20 +322,22 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
 
     price_id = _price_id_for_key(request.price_key)
     if not price_id:
-        raise HTTPException(status_code=400, detail=f"Invalid price tier or missing env var for {request.price_key}")
+        raise HTTPException(status_code=400, detail=f"Invalid tier or missing price env for {request.price_key}")
 
     line_items = [{"price": price_id, "quantity": 1}]
 
     if request.include_interview_prep:
-        interview_price_id = _interview_price_id()
-        if not interview_price_id:
+        interview_price = _interview_price_id()
+        if not interview_price:
             raise HTTPException(status_code=400, detail="Interview prep selected but price not configured")
-        line_items.append({"price": interview_price_id, "quantity": 1})
+        line_items.append({"price": interview_price, "quantity": 1})
 
-    # Determine base URL dynamically if possible, else fallback
-    base_url = os.environ.get("FRONTEND_URL", FRONTEND_URL)
-    if req.headers.get("origin"):
-        base_url = req.headers.get("origin")
+    base_url = os.environ.get("FRONTEND_URL", "")
+    origin = req.headers.get("origin")
+    if origin:
+        base_url = origin
+    if not base_url:
+        base_url = "http://localhost:3000"
 
     try:
         checkout_session = stripe.checkout.Session.create(
@@ -384,7 +355,7 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
         )
         return {"checkout_url": checkout_session.url}
     except Exception as e:
-        logger.error(f"Stripe Error: {e}")
+        logger.error(f"Stripe checkout error: {e}")
         raise HTTPException(status_code=500, detail="Stripe checkout failed")
 
 @api_router.post("/verify-session")
@@ -414,10 +385,7 @@ async def verify_session(session_id: str = Form(...)):
                 except Exception as e:
                     logger.error(f"DB insert failed (orders). Continuing without DB. Error: {e}")
 
-            return {
-                "status": "paid",
-                "email": (session.customer_details.email if session.customer_details else metadata.get("email")),
-            }
+            return {"status": "paid", "email": (session.customer_details.email if session.customer_details else metadata.get("email"))}
 
         return {"status": "unpaid"}
 
@@ -425,16 +393,16 @@ async def verify_session(session_id: str = Form(...)):
         logger.error(f"Verify session error: {e}")
         raise HTTPException(status_code=400, detail="Invalid Session")
 
-# Include the router
+# Include router
 app.include_router(api_router)
 
 # -----------------------------
-# CORS (fix wildcard + credentials issue)
+# CORS (IMPORTANT FIX)
 # -----------------------------
 cors_raw = os.environ.get("CORS_ORIGINS", "*")
 origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
 
-# If wildcard is used, credentials must be False (browser rejects otherwise)
+# Browsers reject Access-Control-Allow-Origin: * with credentials=true
 allow_credentials = True
 if "*" in origins:
     allow_credentials = False
