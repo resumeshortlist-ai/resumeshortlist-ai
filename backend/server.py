@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -12,11 +12,15 @@ from datetime import datetime, timezone
 import io
 import json
 import time
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 import pypdf
 import docx
 import stripe
 from openai import OpenAI
+import boto3
 
 
 ROOT_DIR = Path(__file__).parent
@@ -71,6 +75,8 @@ class CheckoutRequest(BaseModel):
     include_interview_prep: bool = False
     upload_id: Optional[str] = None
     email: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
 
 
 def extract_text_from_pdf(file_content: bytes) -> str:
@@ -177,13 +183,137 @@ Be strict. Typical score 45–65.
     }
 
 
+def _serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
+    if not order:
+        return {}
+    customer = order.get("customer") or {}
+    payment = order.get("payment") or {}
+    return {
+        "upload_id": order.get("upload_id"),
+        "status": order.get("status"),
+        "tier": order.get("tier"),
+        "score": order.get("score"),
+        "created_at": order.get("created_at").isoformat() if order.get("created_at") else None,
+        "original_filename": order.get("original_filename"),
+        "revised_filename": order.get("revised_filename"),
+        "original_r2_key": order.get("original_r2_key"),
+        "revised_r2_key": order.get("revised_r2_key"),
+        "customer": {
+            "name": customer.get("name"),
+            "email": customer.get("email"),
+            "phone": customer.get("phone"),
+        },
+        "payment": {
+            "session_id": payment.get("session_id"),
+            "status": payment.get("status"),
+            "paid_at": payment.get("paid_at").isoformat() if payment.get("paid_at") else None,
+        },
+    }
+
+
+def _smtp_config() -> Dict[str, Any]:
+    host = os.environ.get("SMTP_HOST")
+    if not host:
+        return {}
+    return {
+        "host": host,
+        "port": int(os.environ.get("SMTP_PORT", "587")),
+        "username": os.environ.get("SMTP_USER"),
+        "password": os.environ.get("SMTP_PASSWORD"),
+        "sender": os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER"),
+    }
+
+
+def _r2_config() -> Dict[str, Any]:
+    bucket = os.environ.get("R2_BUCKET")
+    account_id = os.environ.get("R2_ACCOUNT_ID")
+    access_key = os.environ.get("R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+    if not all([bucket, account_id, access_key, secret_key]):
+        return {}
+    endpoint = os.environ.get("R2_ENDPOINT") or f"https://{account_id}.r2.cloudflarestorage.com"
+    return {
+        "bucket": bucket,
+        "endpoint": endpoint,
+        "access_key": access_key,
+        "secret_key": secret_key,
+    }
+
+
+def _r2_client():
+    config = _r2_config()
+    if not config:
+        return None
+    return boto3.client(
+        "s3",
+        endpoint_url=config["endpoint"],
+        aws_access_key_id=config["access_key"],
+        aws_secret_access_key=config["secret_key"],
+        region_name="auto",
+    )
+
+
+def _r2_key(upload_id: str, filename: str, variant: str) -> str:
+    extension = ""
+    if filename and "." in filename:
+        extension = filename.split(".")[-1].lower()
+    suffix = f".{extension}" if extension else ""
+    return f"uploads/{upload_id}/{variant}{suffix}"
+
+
+def _r2_upload_bytes(key: str, content: bytes, content_type: str) -> None:
+    client = _r2_client()
+    config = _r2_config()
+    if not client or not config:
+        raise RuntimeError("R2 is not configured. Set R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.")
+    client.put_object(Bucket=config["bucket"], Key=key, Body=content, ContentType=content_type)
+
+
+def _r2_download_bytes(key: str) -> bytes:
+    client = _r2_client()
+    config = _r2_config()
+    if not client or not config:
+        raise RuntimeError("R2 is not configured. Set R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.")
+    response = client.get_object(Bucket=config["bucket"], Key=key)
+    return response["Body"].read()
+
+
+def _send_revision_email(
+    *,
+    recipient: str,
+    customer_name: str,
+    subject: str,
+    body: str,
+    attachment_name: str,
+    attachment_bytes: bytes,
+    attachment_type: str,
+) -> None:
+    config = _smtp_config()
+    if not config:
+        raise RuntimeError("SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = config["sender"]
+    msg["To"] = recipient
+    msg.set_content(body)
+    msg.add_attachment(attachment_bytes, maintype=attachment_type.split("/")[0], subtype=attachment_type.split("/")[1], filename=attachment_name)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP(config["host"], config["port"]) as server:
+        server.starttls(context=context)
+        if config.get("username") and config.get("password"):
+            server.login(config["username"], config["password"])
+        server.send_message(msg)
+
+
 @api_router.get("/health")
 async def health():
     return {"ok": True, "db": bool(db), "openai": bool(openai_client), "stripe": bool(stripe.api_key)}
 
 
 @api_router.post("/analyze")
-async def analyze_resume(file: UploadFile = File(...)):
+async def analyze_resume(file: UploadFile = File(...), name: str = Form(...), email: str = Form(...)):
     content = await file.read()
     filename = (file.filename or "resume").lower()
 
@@ -205,11 +335,24 @@ async def analyze_resume(file: UploadFile = File(...)):
 
     if db:
         try:
-            await db.uploads.insert_one(
-                {"id": upload_id, "filename": file.filename, "timestamp": datetime.now(timezone.utc), "score": analysis["score"]}
+            original_key = _r2_key(upload_id, file.filename or "resume", "original")
+            _r2_upload_bytes(original_key, content, file.content_type or "application/octet-stream")
+            await db.resume_requests.insert_one(
+                {
+                    "upload_id": upload_id,
+                    "created_at": datetime.now(timezone.utc),
+                    "status": "analysis_complete",
+                    "tier": analysis.get("suggested_tier"),
+                    "score": analysis.get("score"),
+                    "original_filename": file.filename,
+                    "original_content_type": file.content_type or "application/octet-stream",
+                    "original_r2_key": original_key,
+                    "customer": {"name": name, "email": email},
+                    "analysis": analysis,
+                }
             )
         except Exception as e:
-            logger.error(f"DB insert failed (uploads): {e}")
+            logger.error(f"DB insert failed (resume_requests): {e}")
 
     return {
         "upload_id": upload_id,
@@ -245,6 +388,21 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
         base_url = req.headers.get("origin")
 
     try:
+        if db and request.upload_id:
+            await db.resume_requests.update_one(
+                {"upload_id": request.upload_id},
+                {
+                    "$set": {
+                        "customer": {
+                            "name": request.name,
+                            "email": request.email,
+                            "phone": request.phone,
+                        },
+                        "tier": (request.price_key or "").upper(),
+                        "status": "checkout_started",
+                    }
+                },
+            )
         session = stripe.checkout.Session.create(
             mode="payment",
             line_items=line_items,
@@ -255,12 +413,13 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
                 "upload_id": request.upload_id or "",
                 "tier": (request.price_key or "").upper(),
                 "email": request.email or "",
+                "name": request.name or "",
+                "phone": request.phone or "",
                 "interview_prep": str(bool(request.include_interview_prep)),
             },
         )
         return {"checkout_url": session.url}
     except Exception as e:
-        # THIS is what you need to see
         logger.exception(f"Stripe checkout failed: {e}")
         raise HTTPException(status_code=500, detail=f"Stripe checkout failed: {str(e)}")
 
@@ -273,11 +432,146 @@ async def verify_session(session_id: str = Form(...)):
     try:
         session = stripe.checkout.Session.retrieve(session_id)
         if session.payment_status == "paid":
+            if db and session.client_reference_id:
+                await db.resume_requests.update_one(
+                    {"upload_id": session.client_reference_id},
+                    {
+                        "$set": {
+                            "payment": {
+                                "session_id": session_id,
+                                "status": "paid",
+                                "paid_at": datetime.now(timezone.utc),
+                            },
+                            "status": "paid",
+                        }
+                    },
+                )
             return {"status": "paid", "email": (session.customer_details.email if session.customer_details else None)}
         return {"status": "unpaid"}
     except Exception as e:
         logger.error(f"Verify session error: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid Session: {str(e)}")
+
+
+@api_router.get("/admin/orders")
+async def admin_orders():
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    orders = await db.resume_requests.find().sort("created_at", -1).to_list(200)
+    return {"orders": [_serialize_order(order) for order in orders]}
+
+
+@api_router.get("/admin/orders/{upload_id}/file")
+async def admin_download_file(upload_id: str, file_type: str = "original"):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    order = await db.resume_requests.find_one({"upload_id": upload_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    name_field = "original_filename" if file_type == "original" else "revised_filename"
+    content_field = "original_content_type" if file_type == "original" else "revised_content_type"
+    key_field = "original_r2_key" if file_type == "original" else "revised_r2_key"
+
+    r2_key = order.get(key_field)
+    if not r2_key:
+        raise HTTPException(status_code=404, detail="File not available")
+
+    filename = order.get(name_field) or f"{upload_id}-{file_type}.pdf"
+    content_type = order.get(content_field) or "application/octet-stream"
+    try:
+        file_bytes = _r2_download_bytes(r2_key)
+    except Exception as e:
+        logger.error(f"R2 download failed: {e}")
+        raise HTTPException(status_code=500, detail="Unable to download file")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=file_bytes, media_type=content_type, headers=headers)
+
+
+@api_router.post("/admin/orders/{upload_id}/revised")
+async def admin_upload_revision(upload_id: str, file: UploadFile = File(...)):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    content = await file.read()
+    revised_key = _r2_key(upload_id, file.filename or "revised", "revised")
+    try:
+        _r2_upload_bytes(revised_key, content, file.content_type or "application/octet-stream")
+    except Exception as e:
+        logger.error(f"R2 upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Unable to upload revised resume")
+    result = await db.resume_requests.update_one(
+        {"upload_id": upload_id},
+        {
+            "$set": {
+                "revised_filename": file.filename,
+                "revised_content_type": file.content_type or "application/octet-stream",
+                "revised_r2_key": revised_key,
+                "revised_uploaded_at": datetime.now(timezone.utc),
+                "status": "revised_ready",
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {"ok": True}
+
+
+@api_router.post("/admin/orders/{upload_id}/send-revision")
+async def admin_send_revision(upload_id: str):
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    order = await db.resume_requests.find_one({"upload_id": upload_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    customer = order.get("customer") or {}
+    recipient = customer.get("email")
+    if not recipient:
+        raise HTTPException(status_code=400, detail="Customer email missing")
+
+    revised_key = order.get("revised_r2_key")
+    if not revised_key:
+        raise HTTPException(status_code=400, detail="Revised resume not uploaded")
+
+    customer_name = customer.get("name") or "there"
+    filename = order.get("revised_filename") or f"{upload_id}-revised.pdf"
+    content_type = order.get("revised_content_type") or "application/octet-stream"
+    try:
+        revised_file = _r2_download_bytes(revised_key)
+    except Exception as e:
+        logger.error(f"R2 download failed: {e}")
+        raise HTTPException(status_code=500, detail="Unable to download revised resume")
+
+    subject = "Your revised resume is ready"
+    body = (
+        f"Hi {customer_name},\n\n"
+        "Your revised resume is attached. If you have any questions or want additional edits, reply to this email.\n\n"
+        "Best,\nResume Shortlist Team"
+    )
+
+    try:
+        _send_revision_email(
+            recipient=recipient,
+            customer_name=customer_name,
+            subject=subject,
+            body=body,
+            attachment_name=filename,
+            attachment_bytes=revised_file,
+            attachment_type=content_type,
+        )
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Email send failed: {str(e)}")
+
+    await db.resume_requests.update_one(
+        {"upload_id": upload_id},
+        {"$set": {"status": "delivered", "delivered_at": datetime.now(timezone.utc)}},
+    )
+
+    return {"ok": True}
 
 
 app.include_router(api_router)

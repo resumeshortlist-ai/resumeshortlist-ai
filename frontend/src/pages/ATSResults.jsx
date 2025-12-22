@@ -15,6 +15,9 @@ const ATSResults = () => {
   const [selectedTier, setSelectedTier] = useState(null);
   const [interviewPrep, setInterviewPrep] = useState(false);
   const [loadingCheckout, setLoadingCheckout] = useState(false);
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
 
   // Set default tier when analysis loads
   useEffect(() => {
@@ -68,7 +71,33 @@ const ATSResults = () => {
 
           <Card className="shadow-lg border-primary/10">
             <CardContent className="p-12">
-               <FileUpload onAnalysisComplete={setAnalysis} />
+              <div className="mb-6 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-muted-foreground">Full Name</label>
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="First Last"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-muted-foreground">Email Address</label>
+                  <input
+                    type="email"
+                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="you@email.com"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                  />
+                </div>
+              </div>
+              <FileUpload
+                onAnalysisComplete={setAnalysis}
+                applicantName={contactName}
+                applicantEmail={contactEmail}
+              />
             </CardContent>
           </Card>
         </div>
@@ -81,13 +110,19 @@ const ATSResults = () => {
           alert("Please select a career level.");
           return;
       }
+      if (!contactName.trim() || !contactEmail.trim()) {
+          alert("Please enter your name and email so we can deliver your revised resume.");
+          return;
+      }
       setLoadingCheckout(true);
       try {
           const response = await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/checkout`, {
               price_key: selectedTier,
               include_interview_prep: interviewPrep,
               upload_id: analysis.upload_id,
-              email: "guest@example.com" // In prod, ask for this first
+              email: contactEmail,
+              name: contactName,
+              phone: contactPhone
           });
           
           if (response.data.checkout_url) {
@@ -288,6 +323,39 @@ const ATSResults = () => {
                             <div className="font-bold">${tier.price}</div>
                         </div>
                     ))}
+                </div>
+
+                <div className="pt-4 border-t border-primary-foreground/10 mt-4 space-y-3">
+                    <div>
+                        <label className="text-xs uppercase tracking-wide text-primary-foreground/70">Full Name</label>
+                        <input
+                            type="text"
+                            className="mt-1 w-full rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-3 py-2 text-sm text-primary-foreground placeholder:text-primary-foreground/50 focus:outline-none focus:ring-2 focus:ring-accent"
+                            placeholder="Jane Doe"
+                            value={contactName}
+                            onChange={(e) => setContactName(e.target.value)}
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs uppercase tracking-wide text-primary-foreground/70">Email Address</label>
+                        <input
+                            type="email"
+                            className="mt-1 w-full rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-3 py-2 text-sm text-primary-foreground placeholder:text-primary-foreground/50 focus:outline-none focus:ring-2 focus:ring-accent"
+                            placeholder="you@email.com"
+                            value={contactEmail}
+                            onChange={(e) => setContactEmail(e.target.value)}
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs uppercase tracking-wide text-primary-foreground/70">Phone (optional)</label>
+                        <input
+                            type="tel"
+                            className="mt-1 w-full rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-3 py-2 text-sm text-primary-foreground placeholder:text-primary-foreground/50 focus:outline-none focus:ring-2 focus:ring-accent"
+                            placeholder="+1 555 123 4567"
+                            value={contactPhone}
+                            onChange={(e) => setContactPhone(e.target.value)}
+                        />
+                    </div>
                 </div>
 
                 <div className="pt-4 border-t border-primary-foreground/10 mt-4">

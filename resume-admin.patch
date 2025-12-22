@@ -93,4 +93,117 @@ index 0faa57c..dc92ce1 100644
 +            "paid_at": payment.get("paid_at").isoformat() if payment.get("paid_at") else None,
 +        },
 +    }
-+...(patch continues)...
++
++def _smtp_config() -> Dict[str, Any]:
++    host = os.environ.get("SMTP_HOST")
++    if not host:
++        return {}
++    return {
++        "host": host,
++        "port": int(os.environ.get("SMTP_PORT", "587")),
++        "username": os.environ.get("SMTP_USER"),
++        "password": os.environ.get("SMTP_PASSWORD"),
++        "sender": os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER"),
++    }
++
++def _r2_config() -> Dict[str, Any]:
++    bucket = os.environ.get("R2_BUCKET")
++    account_id = os.environ.get("R2_ACCOUNT_ID")
++    access_key = os.environ.get("R2_ACCESS_KEY_ID")
++    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
++    if not all([bucket, account_id, access_key, secret_key]):
++        return {}
++    endpoint = os.environ.get("R2_ENDPOINT") or f"https://{account_id}.r2.cloudflarestorage.com"
++    return {
++        "bucket": bucket,
++        "endpoint": endpoint,
++        "access_key": access_key,
++        "secret_key": secret_key,
++    }
++
++def _r2_client():
++    config = _r2_config()
++    if not config:
++        return None
++    return boto3.client(
++        "s3",
++        endpoint_url=config["endpoint"],
++        aws_access_key_id=config["access_key"],
++        aws_secret_access_key=config["secret_key"],
++        region_name="auto",
++    )
++
++def _r2_key(upload_id: str, filename: str, variant: str) -> str:
++    extension = ""
++    if filename and "." in filename:
++        extension = filename.split(".")[-1].lower()
++    suffix = f".{extension}" if extension else ""
++    return f"uploads/{upload_id}/{variant}{suffix}"
++
++def _r2_upload_bytes(key: str, content: bytes, content_type: str) -> None:
++    client = _r2_client()
++    config = _r2_config()
++    if not client or not config:
++        raise RuntimeError("R2 is not configured. Set R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.")
++    client.put_object(Bucket=config["bucket"], Key=key, Body=content, ContentType=content_type)
++
++def _r2_download_bytes(key: str) -> bytes:
++    client = _r2_client()
++    config = _r2_config()
++    if not client or not config:
++        raise RuntimeError("R2 is not configured. Set R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.")
++    response = client.get_object(Bucket=config["bucket"], Key=key)
++    return response["Body"].read()
++
++def _send_revision_email(
++    *,
++    recipient: str,
++    customer_name: str,
++    subject: str,
++    body: str,
++    attachment_name: str,
++    attachment_bytes: bytes,
++    attachment_type: str,
++) -> None:
++    config = _smtp_config()
++    if not config:
++        raise RuntimeError("SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM.")
++    msg = EmailMessage()
++    msg["Subject"] = subject
++    msg["From"] = config["sender"]
++    msg["To"] = recipient
++    msg.set_content(body)
++    msg.add_attachment(attachment_bytes, maintype=attachment_type.split("/")[0], subtype=attachment_type.split("/")[1], filename=attachment_name)
++    context = ssl.create_default_context()
++    with smtplib.SMTP(config["host"], config["port"]) as server:
++        server.starttls(context=context)
++        if config.get("username") and config.get("password"):
++            server.login(config["username"], config["password"])
++        server.send_message(msg)
++
+@@ -191,7 +321,7 @@ async def health():
+     return {"ok": True, "db": bool(db), "openai": bool(openai_client), "stripe": bool(stripe.api_key)}
+ 
+ 
+ @api_router.post("/analyze")
+-async def analyze_resume(file: UploadFile = File(...)):
++async def analyze_resume(file: UploadFile = File(...), name: str = Form(...), email: str = Form(...)):
+@@ -218,12 +348,16 @@ async def analyze_resume(file: UploadFile = File(...)):
+     if db:
+         try:
++            original_key = _r2_key(upload_id, file.filename or "resume", "original")
++            _r2_upload_bytes(original_key, content, file.content_type or "application/octet-stream")
+             await db.resume_requests.insert_one(
+                 {"upload_id": upload_id, "created_at": datetime.now(timezone.utc), "status": "analysis_complete",
+-                 "tier": analysis.get("suggested_tier"), "score": analysis.get("score"),
+-                 "original_filename": file.filename, "original_content_type": file.content_type or "application/octet-stream",
+-                 "analysis": analysis}
++                 "tier": analysis.get("suggested_tier"), "score": analysis.get("score"),
++                 "original_filename": file.filename, "original_content_type": file.content_type or "application/octet-stream",
++                 "original_r2_key": original_key,
++                 "customer": {"name": name, "email": email},
++                 "analysis": analysis}
+             )
+         except Exception as e:
+             logger.error(f"DB insert failed (resume_requests): {e}")
+... (rest of patch continues) ...

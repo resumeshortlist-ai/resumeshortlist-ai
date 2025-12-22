@@ -5,7 +5,7 @@ import { Card, CardContent } from "./ui/card";
 import { cn } from "../lib/utils";
 import axios from "axios";
 
-const FileUpload = ({ onAnalysisComplete }) => {
+const FileUpload = ({ onAnalysisComplete, applicantName, applicantEmail }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -37,6 +37,11 @@ const FileUpload = ({ onAnalysisComplete }) => {
   };
 
   const handleFile = async (file) => {
+    if (!applicantName?.trim() || !applicantEmail?.trim()) {
+      setError("Please enter your full name and email before uploading.");
+      return;
+    }
+
     const validTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
     if (!validTypes.includes(file.type)) {
       setError("Please upload a PDF or DOCX file.");
@@ -48,6 +53,8 @@ const FileUpload = ({ onAnalysisComplete }) => {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("name", applicantName.trim());
+    formData.append("email", applicantEmail.trim());
 
     try {
       const response = await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/analyze`, formData, {

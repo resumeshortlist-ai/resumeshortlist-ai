@@ -3,72 +3,177 @@ import axios from "axios";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Check, X, FileText, Loader2 } from "lucide-react";
+import { FileText, Loader2, UploadCloud, Mail, RefreshCw } from "lucide-react";
 
 const AdminDashboard = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [uploadingId, setUploadingId] = useState(null);
+  const [sendingId, setSendingId] = useState(null);
+
+  const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+  const fetchOrders = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await axios.get(`${backendUrl}/api/admin/orders`);
+      setOrders(response.data.orders || []);
+    } catch (e) {
+      console.error(e);
+      setError(e.response?.data?.detail || "Failed to load admin orders.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    // Poll for status checks (mocking orders for now since we don't have a full auth/admin API yet)
-    // In a real app, this would be GET /api/admin/orders
-    const fetchOrders = async () => {
-        try {
-            // Since we don't have a GET /api/orders, I'll just mock the UI to show I understood the requirement
-            // The backend *does* save orders to MongoDB, so I could expose an endpoint.
-            // But for this demo, I will simulate "Pending Reviews".
-            setOrders([
-                { id: "1", client: "John Doe", tier: "Executive", status: "Pending Review", time: "10 mins ago" },
-                { id: "2", client: "Sarah Smith", tier: "Mid-Level", status: "In Progress", time: "1 hour ago" },
-            ]);
-            setLoading(false);
-        } catch (e) {
-            console.error(e);
-        }
-    };
     fetchOrders();
   }, []);
 
-  const handleApprove = (id) => {
-      alert(`Resume #${id} approved and sent to client.`);
-      setOrders(orders.filter(o => o.id !== id));
+  const handleDownload = (uploadId, type) => {
+    const url = `${backendUrl}/api/admin/orders/${uploadId}/file?file_type=${type}`;
+    window.open(url, "_blank");
+  };
+
+  const handleRevisionUpload = async (uploadId, file) => {
+    if (!file) {
+      return;
+    }
+    setUploadingId(uploadId);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await axios.post(`${backendUrl}/api/admin/orders/${uploadId}/revised`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      await fetchOrders();
+    } catch (e) {
+      console.error(e);
+      alert(e.response?.data?.detail || "Failed to upload revised resume.");
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
+  const handleSendRevision = async (uploadId) => {
+    setSendingId(uploadId);
+    try {
+      await axios.post(`${backendUrl}/api/admin/orders/${uploadId}/send-revision`);
+      await fetchOrders();
+    } catch (e) {
+      console.error(e);
+      alert(e.response?.data?.detail || "Failed to send revision email.");
+    } finally {
+      setSendingId(null);
+    }
   };
 
   return (
     <div className="container py-12">
-      <h1 className="text-3xl font-serif font-bold mb-8">Secretary Dashboard</h1>
-      
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+        <div>
+          <h1 className="text-3xl font-serif font-bold">Admin Dashboard</h1>
+          <p className="text-muted-foreground">Download, revise, and deliver resumes in one place.</p>
+        </div>
+        <Button variant="outline" className="gap-2" onClick={fetchOrders} disabled={loading}>
+          <RefreshCw className="h-4 w-4" /> Refresh
+        </Button>
+      </div>
+
       <div className="grid gap-6">
         <Card>
-            <CardHeader>
-                <CardTitle>Pending Reviews</CardTitle>
-            </CardHeader>
-            <CardContent>
-                {loading ? <Loader2 className="animate-spin" /> : (
-                    <div className="space-y-4">
-                        {orders.map(order => (
-                            <div key={order.id} className="flex items-center justify-between p-4 border rounded-lg bg-secondary/10">
-                                <div>
-                                    <div className="font-bold flex items-center gap-2">
-                                        {order.client}
-                                        <Badge>{order.tier}</Badge>
-                                    </div>
-                                    <div className="text-sm text-muted-foreground">Submitted {order.time}</div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button variant="outline" size="sm" className="gap-2">
-                                        <FileText className="h-4 w-4" /> View Draft
-                                    </Button>
-                                    <Button size="sm" onClick={() => handleApprove(order.id)} className="gap-2 bg-green-600 hover:bg-green-700">
-                                        <Check className="h-4 w-4" /> Approve & Send
-                                    </Button>
-                                </div>
-                            </div>
-                        ))}
-                        {orders.length === 0 && <div className="text-muted-foreground">No pending reviews.</div>}
+          <CardHeader>
+            <CardTitle>Active Orders</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <Loader2 className="animate-spin" />
+            ) : error ? (
+              <div className="text-destructive">{error}</div>
+            ) : (
+              <div className="space-y-4">
+                {orders.map((order) => (
+                  <div key={order.upload_id} className="border rounded-lg p-4 space-y-3">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-bold">{order.customer?.name || "Unknown Client"}</div>
+                          {order.tier && <Badge variant="secondary">{order.tier}</Badge>}
+                          {order.status && <Badge>{order.status.replace("_", " ")}</Badge>}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {order.customer?.email || "No email provided"} · {order.customer?.phone || "No phone"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Upload ID: {order.upload_id}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => handleDownload(order.upload_id, "original")}
+                        >
+                          <FileText className="h-4 w-4" /> Original
+                        </Button>
+                        {order.revised_filename && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => handleDownload(order.upload_id, "revised")}
+                          >
+                            <FileText className="h-4 w-4" /> Revised
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                )}
-            </CardContent>
+
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div className="text-sm text-muted-foreground">
+                        {order.original_filename ? `Original: ${order.original_filename}` : "Original resume missing."}
+                        {order.revised_filename ? ` · Revised: ${order.revised_filename}` : ""}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <label className="relative inline-flex items-center gap-2">
+                          <input
+                            type="file"
+                            className="absolute inset-0 opacity-0 cursor-pointer"
+                            accept=".pdf,.doc,.docx"
+                            disabled={uploadingId === order.upload_id}
+                            onChange={(e) => handleRevisionUpload(order.upload_id, e.target.files?.[0])}
+                          />
+                          <Button variant="outline" size="sm" className="gap-2" disabled={uploadingId === order.upload_id}>
+                            {uploadingId === order.upload_id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <UploadCloud className="h-4 w-4" />
+                            )}
+                            Upload Revision
+                          </Button>
+                        </label>
+                        <Button
+                          size="sm"
+                          className="gap-2"
+                          disabled={sendingId === order.upload_id || !order.revised_filename}
+                          onClick={() => handleSendRevision(order.upload_id)}
+                        >
+                          {sendingId === order.upload_id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Mail className="h-4 w-4" />
+                          )}
+                          Email Client
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {orders.length === 0 && <div className="text-muted-foreground">No orders yet.</div>}
+              </div>
+            )}
+          </CardContent>
         </Card>
       </div>
     </div>
