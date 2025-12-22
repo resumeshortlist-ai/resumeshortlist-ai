@@ -1,0 +1,96 @@
+From 30b2bd59186efcfec79f9f63ff2290153bc7a385 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Mon, 22 Dec 2025 16:29:25 +0000
+Subject: [PATCH] Admin resume repository: Cloudflare R2 storage, contact
+ capture, and admin UI
+
+### Motivation
+- Provide a persistent admin workflow so uploaded resumes can be reviewed, revised, and delivered to customers.
+- Capture customer contact details (full name, email, phone) for delivery, follow-ups and refunds.
+- Move binary file storage out of MongoDB to Cloudflare R2 for scalable object storage and simpler downloads.
+- Enforce basic contact validation so uploads include identity information before analysis/delivery.
+
+### Description
+- Backend: added Cloudflare R2 helpers (`_r2_config`, `_r2_client`, `_r2_upload_bytes`, `_r2_download_bytes`) and store `original_r2_key`/`revised_r2_key` in `resume_requests` instead of binary blobs.
+- Backend: added admin endpoints `GET /api/admin/orders`, `GET /api/admin/orders/{upload_id}/file`, `POST /api/admin/orders/{upload_id}/revised`, and `POST /api/admin/orders/{upload_id}/send-revision`, plus SMTP helper `_send_revision_email` to deliver revised resumes.
+- Backend: capture and persist customer contact on upload and checkout (extended `CheckoutRequest` with `name` and `phone`), and update order/payment status in `verify-session`.
+- Frontend: require `Full Name` and `Email` on the upload screen (block uploads until provided), include contact fields in the checkout sidebar, and replace the demo admin page with a functional `Admin.jsx` that lists orders and supports download/upload/email actions.
+
+### Testing
+- Started the frontend development server with `npm start` and the app compiled successfully.
+- Attempted an automated Playwright screenshot of the upload/admin pages but the run failed with `net::ERR_CONNECTION_REFUSED` (browser could not connect), so end-to-end UI capture failed.
+- No automated backend unit or integration tests were executed for the new endpoints or email/R2 flows.
+- Environment variables for Cloudflare R2 and backend were added to the deployment (Render/Vercel) and services were redeployed for manual verification (manual checks recommended).
+---
+ backend/server.py                      | 305 ++++++++++++++++++++++++- 
+ frontend/src/components/FileUpload.jsx |   9 +-
+ frontend/src/pages/ATSResults.jsx      |  72 +++++-
+ frontend/src/pages/Admin.jsx           | 205 +++++++++++++----
+ 4 files changed, 533 insertions(+), 58 deletions(-)
+
+diff --git a/backend/server.py b/backend/server.py
+index 0faa57c..dc92ce1 100644
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -1,4 +1,4 @@
+-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request
++from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request, Response
+ from dotenv import load_dotenv
+ from starlette.middleware.cors import CORSMiddleware
+ from motor.motor_asyncio import AsyncIOMotorClient
+@@ -12,11 +12,15 @@ from datetime import datetime, timezone
+ import io
+ import json
+ import time
++import smtplib
++import ssl
++from email.message import EmailMessage
+ 
+ import pypdf
+ import docx
+ import stripe
+ from openai import OpenAI
++import boto3
+ 
+ 
+ ROOT_DIR = Path(__file__).parent
+@@ -71,6 +75,8 @@ class CheckoutRequest(BaseModel):
+     include_interview_prep: bool = False
+     upload_id: Optional[str] = None
+     email: Optional[str] = None
++    name: Optional[str] = None
++    phone: Optional[str] = None
+ 
+ 
+ def extract_text_from_pdf(file_content: bytes) -> str:
+@@ -177,13 +183,137 @@ Be strict. Typical score 45–65.
+     }
+ 
+ 
++def _serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
++    if not order:
++        return {}
++    customer = order.get("customer") or {}
++    payment = order.get("payment") or {}
++    return {
++        "upload_id": order.get("upload_id"),
++        "status": order.get("status"),
++        "tier": order.get("tier"),
++        "score": order.get("score"),
++        "created_at": order.get("created_at").isoformat() if order.get("created_at") else None,
++        "original_filename": order.get("original_filename"),
++        "revised_filename": order.get("revised_filename"),
++        "original_r2_key": order.get("original_r2_key"),
++        "revised_r2_key": order.get("revised_r2_key"),
++        "customer": {
++            "name": customer.get("name"),
++            "email": customer.get("email"),
++            "phone": customer.get("phone"),
++        },
++        "payment": {
++            "session_id": payment.get("session_id"),
++            "status": payment.get("status"),
++            "paid_at": payment.get("paid_at").isoformat() if payment.get("paid_at") else None,
++        },
++    }
++...(patch continues)...
