@@ -18,6 +18,18 @@ const ATSResults = () => {
   const [contactName, setContactName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  const hasFullName = (value) => {
+    const parts = value.trim().split(/\s+/).filter(Boolean);
+    return parts.length >= 2;
+  };
+
+  const isValidEmail = (value) => {
+    if (!value) {
+      return false;
+    }
+    const [local, domain] = value.split("@");
+    return Boolean(local && domain && domain.includes("."));
+  };
 
   // Set default tier when analysis loads
   useEffect(() => {
@@ -112,6 +124,14 @@ const ATSResults = () => {
       }
       if (!contactName.trim() || !contactEmail.trim()) {
           alert("Please enter your name and email so we can deliver your revised resume.");
+          return;
+      }
+      if (!hasFullName(contactName)) {
+          alert("Please enter both your first and last name.");
+          return;
+      }
+      if (!isValidEmail(contactEmail)) {
+          alert("Please enter a valid email address.");
           return;
       }
       setLoadingCheckout(true);

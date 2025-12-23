@@ -9,6 +9,21 @@ const FileUpload = ({ onAnalysisComplete, applicantName, applicantEmail }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
+  const trimmedName = applicantName?.trim() || "";
+  const trimmedEmail = applicantEmail?.trim() || "";
+
+  const hasFullName = (value) => {
+    const parts = value.split(/\s+/).filter(Boolean);
+    return parts.length >= 2;
+  };
+
+  const isValidEmail = (value) => {
+    if (!value) {
+      return false;
+    }
+    const [local, domain] = value.split("@");
+    return Boolean(local && domain && domain.includes("."));
+  };
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -37,8 +52,16 @@ const FileUpload = ({ onAnalysisComplete, applicantName, applicantEmail }) => {
   };
 
   const handleFile = async (file) => {
-    if (!applicantName?.trim() || !applicantEmail?.trim()) {
+    if (!trimmedName || !trimmedEmail) {
       setError("Please enter your full name and email before uploading.");
+      return;
+    }
+    if (!hasFullName(trimmedName)) {
+      setError("Please enter both your first and last name.");
+      return;
+    }
+    if (!isValidEmail(trimmedEmail)) {
+      setError("Please enter a valid email address.");
       return;
     }
 
@@ -53,8 +76,8 @@ const FileUpload = ({ onAnalysisComplete, applicantName, applicantEmail }) => {
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("name", applicantName.trim());
-    formData.append("email", applicantEmail.trim());
+    formData.append("name", trimmedName);
+    formData.append("email", trimmedEmail);
 
     try {
       const response = await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/analyze`, formData, {
@@ -130,3 +153,4 @@ const FileUpload = ({ onAnalysisComplete, applicantName, applicantEmail }) => {
 };
 
 export default FileUpload;
+

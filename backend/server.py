@@ -211,6 +211,21 @@ def _serialize_order(order: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_full_name(value: str) -> bool:
+    parts = [part for part in (value or "").strip().split() if part]
+    return len(parts) >= 2
+
+
+def _is_valid_email(value: str) -> bool:
+    if not value:
+        return False
+    value = value.strip()
+    if "@" not in value:
+        return False
+    local, _, domain = value.partition("@")
+    return bool(local) and "." in domain
+
+
 def _smtp_config() -> Dict[str, Any]:
     host = os.environ.get("SMTP_HOST")
     if not host:
@@ -309,11 +324,18 @@ def _send_revision_email(
 
 @api_router.get("/health")
 async def health():
-    return {"ok": True, "db": bool(db), "openai": bool(openai_client), "stripe": bool(stripe.api_key)}
+    return {"ok": True, "db": db is not None, "openai": bool(openai_client), "stripe": bool(stripe.api_key)}
 
 
 @api_router.post("/analyze")
 async def analyze_resume(file: UploadFile = File(...), name: str = Form(...), email: str = Form(...)):
+    name_value = (name or "").strip()
+    email_value = (email or "").strip()
+    if not _is_full_name(name_value):
+        raise HTTPException(status_code=400, detail="Please provide your first and last name.")
+    if not _is_valid_email(email_value):
+        raise HTTPException(status_code=400, detail="Please provide a valid email address.")
+
     content = await file.read()
     filename = (file.filename or "resume").lower()
 
@@ -347,7 +369,7 @@ async def analyze_resume(file: UploadFile = File(...), name: str = Form(...), em
                     "original_filename": file.filename,
                     "original_content_type": file.content_type or "application/octet-stream",
                     "original_r2_key": original_key,
-                    "customer": {"name": name, "email": email},
+                    "customer": {"name": name_value, "email": email_value},
                     "analysis": analysis,
                 }
             )
@@ -370,6 +392,13 @@ async def analyze_resume(file: UploadFile = File(...), name: str = Form(...), em
 async def create_checkout_session(request: CheckoutRequest, req: Request):
     if not stripe.api_key or not str(stripe.api_key).startswith("sk_"):
         raise HTTPException(status_code=500, detail="Stripe not configured correctly (STRIPE_SECRET_KEY must be sk_...)")
+
+    name_value = (request.name or "").strip()
+    email_value = (request.email or "").strip()
+    if not _is_full_name(name_value):
+        raise HTTPException(status_code=400, detail="Please provide your first and last name.")
+    if not _is_valid_email(email_value):
+        raise HTTPException(status_code=400, detail="Please provide a valid email address.")
 
     price_id = _price_id_for_key(request.price_key)
     if not price_id or not str(price_id).startswith("price_"):
@@ -394,8 +423,8 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
                 {
                     "$set": {
                         "customer": {
-                            "name": request.name,
-                            "email": request.email,
+                            "name": name_value,
+                            "email": email_value,
                             "phone": request.phone,
                         },
                         "tier": (request.price_key or "").upper(),
@@ -412,14 +441,15 @@ async def create_checkout_session(request: CheckoutRequest, req: Request):
             metadata={
                 "upload_id": request.upload_id or "",
                 "tier": (request.price_key or "").upper(),
-                "email": request.email or "",
-                "name": request.name or "",
+                "email": email_value,
+                "name": name_value,
                 "phone": request.phone or "",
                 "interview_prep": str(bool(request.include_interview_prep)),
             },
         )
         return {"checkout_url": session.url}
     except Exception as e:
+        # THIS is what you need to see
         logger.exception(f"Stripe checkout failed: {e}")
         raise HTTPException(status_code=500, detail=f"Stripe checkout failed: {str(e)}")
 
